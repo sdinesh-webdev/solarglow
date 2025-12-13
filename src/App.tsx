@@ -5,6 +5,7 @@ import HistoricalDataChart from './components/HistoricalDataChart';
 import MinuteDataChart from './components/MinutedataChart';
 import SimpleMonthData from './components/MonthlyenergyAnalytics';
 import YearlyEnergyData from './components/YearlyEnergyData';
+import CombinedAreaChart from './components/CombinedAreaChart';
 import { DeviceProvider } from './context/DeviceContext';
 
 const App: React.FC = () => {
@@ -18,6 +19,7 @@ const App: React.FC = () => {
       <MinuteDataChart />
       <SimpleMonthData />
       <YearlyEnergyData />
+      <CombinedAreaChart />
     </div>
    </DeviceProvider>
   );
