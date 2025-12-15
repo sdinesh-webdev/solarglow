@@ -1,5 +1,5 @@
-// components/MonthlyEnergyAnalytics.tsx
-import React, { useState, useEffect } from 'react';
+// components/CumulativeEnergyDisplay.tsx
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, LineChart, Line, BarChart, Bar,
@@ -8,10 +8,9 @@ import {
 import {
   BarChart3, Calendar, RefreshCw, Download,
   TrendingUp, Battery, AlertCircle, CheckCircle,
-  ChevronRight, Zap, ExternalLink, PieChart,
-  ChevronLeft, ChevronDown, Filter, LineChart as LineChartIcon,
-  DollarSign, Activity, Thermometer, Gauge,
-  ChevronUp, Maximize2, Minimize2
+  ChevronRight, Zap, Filter, LineChart as LineChartIcon,
+  Activity, Thermometer, Gauge,
+  ChevronUp, ChevronDown, Maximize2, Minimize2, ArrowRight
 } from 'lucide-react';
 
 interface MonthlyDataResponse {
@@ -39,38 +38,48 @@ interface LoginResponse {
   } | null;
 }
 
-interface MonthlyDataItem {
+interface CumulativeDataItem {
   month: string;
   year: string;
   monthNum: number;
-  monthlyKwh: number; // Monthly production in kWh (after subtraction)
-  cumulativeKwh: number; // Cumulative value in kWh (after conversion from Wh)
-  formattedMonthlyKwh: string;
+  cumulativeWh: number; // Original API value in Wh
+  cumulativeKwh: number; // Converted to kWh (Wh ÷ 1000)
+  formattedCumulativeKwh: string;
+  formattedCumulativeWh: string;
   rawValue: string;
   monthName: string;
   date: string;
   shortDate: string;
-  growth?: string; // Growth percentage from previous month's monthly value
 }
 
-const MonthlyEnergyAnalytics: React.FC = () => {
+interface MonthlyDataItem {
+  time_stamp: string;
+  monthly_energy_kwh: number;
+  monthName: string;
+  shortDate: string;
+  year: string;
+  monthNum: number;
+  cumulativeKwh: number; // Keep for reference
+}
+
+const CumulativeEnergyDisplay: React.FC = () => {
   // State management
   const [loginData, setLoginData] = useState<LoginResponse | null>(null);
-  const [monthlyData, setMonthlyData] = useState<MonthlyDataResponse | null>(null);
+  const [energyData, setEnergyData] = useState<MonthlyDataResponse | null>(null);
   const [loading, setLoading] = useState({
     login: false,
     data: false
   });
   const [error, setError] = useState<string | null>(null);
-
+  
   // Form states
   const [formData, setFormData] = useState({
     ps_key: '1589518_1_1_1',
     data_point: 'p2',
-    start_year: '2025',
-    start_month: '01',
-    end_year: '2025',
-    end_month: '12',
+    start_year: '2024', // Changed to 2024 for your expected data
+    start_month: '05', // May
+    end_year: '2024', // Changed to 2024
+    end_month: '10', // October
     data_type: '2',
     query_type: '2',
     order: '0'
@@ -116,14 +125,14 @@ const MonthlyEnergyAnalytics: React.FC = () => {
       });
 
       const data: LoginResponse = await response.json();
-
+      
       if (!response.ok || data.result_code !== "1") {
         throw new Error(data.result_msg || 'Login failed');
       }
 
       setLoginData(data);
-      console.log('Login successful for monthly data');
-
+      console.log('Login successful');
+      
     } catch (err: any) {
       setError(err.message);
       console.error('Login error:', err);
@@ -132,8 +141,8 @@ const MonthlyEnergyAnalytics: React.FC = () => {
     }
   };
 
-  // Fetch monthly data
-  const fetchMonthlyData = async () => {
+  // Fetch energy data
+  const fetchEnergyData = async () => {
     if (!loginData?.result_data?.token) {
       setError('Please login first');
       return;
@@ -157,7 +166,7 @@ const MonthlyEnergyAnalytics: React.FC = () => {
         order: formData.order
       };
 
-      console.log('Fetching monthly data with:', requestBody);
+      console.log('Fetching energy data with:', requestBody);
 
       const response = await fetch('http://localhost:3000/api/solar/historical-data', {
         method: 'POST',
@@ -166,187 +175,217 @@ const MonthlyEnergyAnalytics: React.FC = () => {
       });
 
       const data: MonthlyDataResponse = await response.json();
-
+      
       if (!response.ok || data.result_code !== "1") {
-        throw new Error(data.result_msg || 'Failed to fetch monthly data');
+        throw new Error(data.result_msg || 'Failed to fetch energy data');
       }
 
-      setMonthlyData(data);
-      console.log('Monthly data fetched:', data);
-
+      setEnergyData(data);
+      console.log('Energy data fetched:', data);
+      
     } catch (err: any) {
       setError(err.message);
-      console.error('Monthly data error:', err);
+      console.error('Energy data error:', err);
     } finally {
       setLoading(prev => ({ ...prev, data: false }));
     }
   };
 
-  // Format monthly data for display and chart - CORRECTED LOGIC
-  const formatMonthlyData = (): MonthlyDataItem[] => {
-    if (!monthlyData) return [];
-
-    const psKey = Object.keys(monthlyData.result_data)[0];
+  // Format cumulative energy data
+  const formatCumulativeData = (): CumulativeDataItem[] => {
+    if (!energyData) return [];
+    
+    const psKey = Object.keys(energyData.result_data)[0];
     if (!psKey) return [];
-
-    const dataPoint = Object.keys(monthlyData.result_data[psKey])[0];
-    const dataArray = monthlyData.result_data[psKey][dataPoint];
-
+    
+    const dataPoint = Object.keys(energyData.result_data[psKey])[0];
+    const dataArray = energyData.result_data[psKey][dataPoint];
+    
+    console.log('Raw API data for conversion:', dataArray);
+    
     if (!dataArray || dataArray.length === 0) return [];
 
-    // First, sort the data by timestamp to ensure chronological order
-    const sortedData = [...dataArray].sort((a, b) => {
-      const aDate = a.time_stamp;
-      const bDate = b.time_stamp;
-      if (aDate < bDate) return -1;
-      if (aDate > bDate) return 1;
-      return 0;
-    });
+    // Sort data by timestamp chronologically
+    const sortedData = [...dataArray].sort((a, b) => a.time_stamp.localeCompare(b.time_stamp));
 
-    const result: MonthlyDataItem[] = [];
-    let previousCumulativeKwh = 0; // Track previous cumulative in kWh
-
-    sortedData.forEach((item, index) => {
+    return sortedData.map((item) => {
       const timestamp = item.time_stamp;
       const year = timestamp.slice(0, 4);
       const monthNum = parseInt(timestamp.slice(4, 6));
       const valueKey = Object.keys(item).find(key => key !== 'time_stamp');
-
-      if (!valueKey) return;
-
-      // Get the raw cumulative value from API (in Wh)
-      const cumulativeValueWh = parseFloat(item[valueKey]);
       
-      // STEP 1: Convert from Wh to kWh by dividing by 1000
-      const cumulativeValueKwh = cumulativeValueWh / 1000;
-
-      // STEP 2: Calculate monthly production in kWh:
-      // Monthly kWh = Current Cumulative kWh - Previous Cumulative kWh
-      const monthlyKwh = cumulativeValueKwh - previousCumulativeKwh;
-
-      // Calculate growth percentage based on monthly kWh values
-      let growth = '';
-      if (index > 0 && result[index - 1].monthlyKwh > 0) {
-        const previousMonthlyKwh = result[index - 1].monthlyKwh;
-        const growthPercentage = ((monthlyKwh - previousMonthlyKwh) / previousMonthlyKwh) * 100;
-        growth = growthPercentage.toFixed(1);
+      if (!valueKey) {
+        return {
+          month: timestamp,
+          year,
+          monthNum,
+          cumulativeWh: 0,
+          cumulativeKwh: 0,
+          formattedCumulativeKwh: '0.00',
+          formattedCumulativeWh: '0',
+          rawValue: '0',
+          monthName: monthNames[monthNum - 1],
+          date: `${shortMonthNames[monthNum - 1]} ${year}`,
+          shortDate: `${shortMonthNames[monthNum - 1]} '${year.slice(2)}`
+        };
       }
 
-      // Create the data item
-      const dataItem: MonthlyDataItem = {
+      const cumulativeWh = parseFloat(item[valueKey]);
+      const cumulativeKwh = cumulativeWh / 1000;
+
+      console.log(`Conversion: ${cumulativeWh} Wh → ${cumulativeKwh} kWh`);
+
+      return {
         month: timestamp,
         year,
         monthNum,
-        monthlyKwh: monthlyKwh,
-        cumulativeKwh: cumulativeValueKwh,
-        formattedMonthlyKwh: monthlyKwh.toLocaleString(undefined, {
+        cumulativeWh,
+        cumulativeKwh,
+        formattedCumulativeKwh: cumulativeKwh.toLocaleString(undefined, {
           minimumFractionDigits: 2,
           maximumFractionDigits: 2
+        }),
+        formattedCumulativeWh: cumulativeWh.toLocaleString(undefined, {
+          minimumFractionDigits: 0,
+          maximumFractionDigits: 0
         }),
         rawValue: item[valueKey],
         monthName: monthNames[monthNum - 1],
         date: `${shortMonthNames[monthNum - 1]} ${year}`,
-        shortDate: `${shortMonthNames[monthNum - 1]} '${year.slice(2)}`,
-        growth
+        shortDate: `${shortMonthNames[monthNum - 1]} '${year.slice(2)}`
       };
-
-      result.push(dataItem);
-      previousCumulativeKwh = cumulativeValueKwh; // Update for next iteration
-    });
-
-    // Sort by year and month
-    return result.sort((a, b) => {
-      if (a.year !== b.year) return parseInt(a.year) - parseInt(b.year);
-      return a.monthNum - b.monthNum;
     });
   };
 
-  // Format data for chart specifically
+  // Pure function to convert cumulative data to monthly data
+  const convertCumulativeToMonthly = (
+    cumulativeData: CumulativeDataItem[]
+  ): MonthlyDataItem[] => {
+    if (!Array.isArray(cumulativeData) || cumulativeData.length === 0) {
+      return [];
+    }
+
+    // Sort chronologically for correct calculations
+    const sortedData = [...cumulativeData].sort((a, b) => {
+      if (a.year !== b.year) return parseInt(a.year) - parseInt(b.year);
+      return a.monthNum - b.monthNum;
+    });
+
+    return sortedData.map((current, index) => {
+      if (index === 0) {
+        // First month: monthly equals cumulative
+        return {
+          time_stamp: current.month,
+          monthly_energy_kwh: Number(current.cumulativeKwh.toFixed(2)),
+          monthName: current.monthName,
+          shortDate: current.shortDate,
+          year: current.year,
+          monthNum: current.monthNum,
+          cumulativeKwh: current.cumulativeKwh
+        };
+      }
+
+      const previous = sortedData[index - 1];
+      const monthlyKwh = current.cumulativeKwh - previous.cumulativeKwh;
+      
+      // Prevent negative values (data safeguard)
+      const safeMonthlyKwh = Math.max(0, monthlyKwh);
+      
+      return {
+        time_stamp: current.month,
+        monthly_energy_kwh: Number(safeMonthlyKwh.toFixed(2)),
+        monthName: current.monthName,
+        shortDate: current.shortDate,
+        year: current.year,
+        monthNum: current.monthNum,
+        cumulativeKwh: current.cumulativeKwh
+      };
+    });
+  };
+
+  // Use useMemo for efficient monthly data calculation
+  const monthlyData = useMemo(() => {
+    const cumulativeData = formatCumulativeData();
+    return convertCumulativeToMonthly(cumulativeData);
+  }, [energyData]);
+
+  // Format data for chart (now uses monthly data)
   const formatChartData = () => {
-    const data = formatMonthlyData();
-    return data.map(item => ({
+    return monthlyData.map(item => ({
       ...item,
       name: item.shortDate,
-      energy: item.monthlyKwh, // Monthly kWh for chart
-      kWh: item.monthlyKwh,
+      energy: item.monthly_energy_kwh, // Now using monthly energy
       cumulative: item.cumulativeKwh,
       monthIndex: parseInt(item.year) * 12 + item.monthNum
     })).sort((a, b) => a.monthIndex - b.monthIndex);
   };
 
-  // Calculate statistics based on monthly production
+  // Calculate statistics based on monthly data
   const calculateStats = () => {
-    const data = formatMonthlyData();
-    if (data.length === 0) return null;
-
-    const monthlyKwhValues = data.map(d => d.monthlyKwh);
-    const sum = monthlyKwhValues.reduce((a, b) => a + b, 0);
-    const avg = sum / monthlyKwhValues.length;
-    const max = Math.max(...monthlyKwhValues);
-    const min = Math.min(...monthlyKwhValues);
-    const maxMonth = data.find(d => d.monthlyKwh === max);
-    const minMonth = data.find(d => d.monthlyKwh === min);
-
-    // Calculate monthly growth based on kWh production (last vs second last)
-    let monthlyGrowth = 0;
-    if (data.length > 1) {
-      const lastMonthValue = data[data.length - 1].monthlyKwh;
-      const secondLastMonthValue = data[data.length - 2].monthlyKwh;
-      monthlyGrowth = secondLastMonthValue > 0
-        ? ((lastMonthValue - secondLastMonthValue) / secondLastMonthValue * 100)
-        : 0;
+    if (monthlyData.length === 0) return null;
+    
+    const monthlyValues = monthlyData.map(d => d.monthly_energy_kwh);
+    const totalMonthlyEnergy = monthlyValues.reduce((sum, val) => sum + val, 0);
+    const averageMonthly = monthlyValues.length > 0 ? totalMonthlyEnergy / monthlyValues.length : 0;
+    const maxMonthly = Math.max(...monthlyValues);
+    const minMonthly = Math.min(...monthlyValues);
+    
+    // Calculate growth from first to last cumulative
+    const cumulativeData = formatCumulativeData();
+    if (cumulativeData.length >= 2) {
+      const firstCumulative = cumulativeData[0].cumulativeKwh;
+      const lastCumulative = cumulativeData[cumulativeData.length - 1].cumulativeKwh;
+      const totalGrowth = firstCumulative > 0 ? ((lastCumulative - firstCumulative) / firstCumulative * 100) : 0;
+      
+      return {
+        totalMonthlyEnergy: Number(totalMonthlyEnergy.toFixed(2)),
+        averageMonthly: Number(averageMonthly.toFixed(2)),
+        maxMonthly: Number(maxMonthly.toFixed(2)),
+        minMonthly: Number(minMonthly.toFixed(2)),
+        totalGrowth: totalGrowth.toFixed(1),
+        count: monthlyData.length,
+        latestMonth: `${monthlyData[monthlyData.length - 1]?.monthName} ${monthlyData[monthlyData.length - 1]?.year}`,
+        firstMonth: `${monthlyData[0]?.monthName} ${monthlyData[0]?.year}`
+      };
     }
-
-    // Calculate trend line (simple linear regression) on kWh production
-    let trendSlope = 0;
-    if (data.length > 1) {
-      const xValues = data.map((_, i) => i);
-      const yValues = data.map(d => d.monthlyKwh);
-      const n = xValues.length;
-
-      const sumX = xValues.reduce((a, b) => a + b, 0);
-      const sumY = yValues.reduce((a, b) => a + b, 0);
-      const sumXY = xValues.reduce((sum, x, i) => sum + x * yValues[i], 0);
-      const sumXX = xValues.reduce((sum, x) => sum + x * x, 0);
-
-      trendSlope = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX);
-    }
-
-    // Get cumulative totals in kWh
-    const totalCumulativeKwh = data.length > 0 ? data[data.length - 1].cumulativeKwh : 0;
-
+    
     return {
-      sum,
-      avg,
-      max,
-      min,
-      maxMonth: maxMonth ? `${maxMonth.monthName} ${maxMonth.year}` : '',
-      minMonth: minMonth ? `${minMonth.monthName} ${minMonth.year}` : '',
-      count: monthlyKwhValues.length,
-      monthlyGrowth: monthlyGrowth.toFixed(1),
-      trendSlope: (trendSlope * 100).toFixed(2),
-      totalCumulativeKwh
+      totalMonthlyEnergy: Number(totalMonthlyEnergy.toFixed(2)),
+      averageMonthly: Number(averageMonthly.toFixed(2)),
+      maxMonthly: Number(maxMonthly.toFixed(2)),
+      minMonthly: Number(minMonthly.toFixed(2)),
+      totalGrowth: '0.0',
+      count: monthlyData.length,
+      latestMonth: `${monthlyData[monthlyData.length - 1]?.monthName} ${monthlyData[monthlyData.length - 1]?.year}`,
+      firstMonth: `${monthlyData[0]?.monthName} ${monthlyData[0]?.year}`
     };
   };
 
   // Export data as CSV
   const exportToCSV = () => {
-    const data = formatMonthlyData();
-    const headers = ['Year', 'Month', 'Monthly Energy (kWh)', 'Cumulative Energy (kWh)', 'Growth %', 'Raw Value (Wh)'];
+    const cumulativeData = formatCumulativeData();
+    const monthly = monthlyData;
+    
+    const headers = ['Year', 'Month', 'Cumulative (Wh)', 'Cumulative (kWh)', 'Monthly (kWh)', 'Calculation'];
     const csvContent = [
       headers.join(','),
-      ...data.map(row => {
+      ...monthly.map((monthlyItem, index) => {
+        const cumulativeItem = cumulativeData[index] || {};
+        const calculation = index === 0 
+          ? 'First month: Monthly = Cumulative'
+          : `Monthly = ${cumulativeItem.cumulativeKwh?.toFixed(2)} - ${cumulativeData[index - 1]?.cumulativeKwh?.toFixed(2)}`;
+        
         return [
-          row.year,
-          row.monthName,
-          row.monthlyKwh.toFixed(2),
-          row.cumulativeKwh.toFixed(2),
-          row.growth ? `${row.growth}%` : '0%',
-          row.rawValue
+          monthlyItem.year,
+          monthlyItem.monthName,
+          cumulativeItem.cumulativeWh || 0,
+          cumulativeItem.cumulativeKwh?.toFixed(2) || '0.00',
+          monthlyItem.monthly_energy_kwh.toFixed(2),
+          calculation
         ].join(',');
       })
     ].join('\n');
-
+    
     const blob = new Blob([csvContent], { type: 'text/csv' });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -354,20 +393,6 @@ const MonthlyEnergyAnalytics: React.FC = () => {
     a.download = `monthly-energy-data-${new Date().toISOString().split('T')[0]}.csv`;
     a.click();
     window.URL.revokeObjectURL(url);
-  };
-
-  // Get data point label and icon
-  const getDataPointConfig = (point: string) => {
-    const configs = {
-      p1: { label: 'Total Power', unit: 'W', icon: Zap, color: '#3B82F6' },
-      p2: { label: 'Total Energy', unit: 'kWh', icon: Battery, color: '#10B981' },
-      p14: { label: 'Grid Voltage', unit: 'V', icon: Gauge, color: '#8B5CF6' },
-      p21: { label: 'Output Current', unit: 'A', icon: Activity, color: '#F59E0B' },
-      p24: { label: 'Output Power', unit: 'W', icon: Zap, color: '#EF4444' },
-      p25: { label: 'Temperature', unit: '°C', icon: Thermometer, color: '#EC4899' },
-      p87: { label: 'Today Energy', unit: 'kWh', icon: Battery, color: '#06B6D4' }
-    };
-    return configs[point as keyof typeof configs] || { label: point, unit: '', icon: Activity, color: '#6B7280' };
   };
 
   // Handle form changes
@@ -393,36 +418,30 @@ const MonthlyEnergyAnalytics: React.FC = () => {
   }));
 
   const stats = calculateStats();
-  const monthlyDataArray = formatMonthlyData();
+  const cumulativeDataArray = formatCumulativeData();
   const chartData = formatChartData();
-  const dataPointConfig = getDataPointConfig(formData.data_point);
-  const IconComponent = dataPointConfig.icon;
 
-  // Custom Tooltip component
+  // Custom Tooltip component - updated for monthly data
   const CustomTooltip = ({ active, payload, label }: any) => {
     if (active && payload && payload.length) {
       const data = payload[0].payload;
       return (
         <div className="bg-white p-4 rounded-lg shadow-lg border border-gray-200">
           <p className="font-semibold text-gray-900 mb-2">{data.monthName} {data.year}</p>
-          <div className="space-y-1">
+          <div className="space-y-2">
             <p className="text-sm">
-              <span className="text-gray-600">Monthly Production: </span>
-              <span className="font-semibold text-gray-900">{data.monthlyKwh.toFixed(2)} {dataPointConfig.unit}</span>
+              <span className="text-gray-600">Monthly Generation: </span>
+              <span className="font-semibold text-green-600">{data.monthly_energy_kwh?.toFixed(2) || data.energy?.toFixed(2)} kWh</span>
             </p>
             <p className="text-sm">
-              <span className="text-gray-600">Cumulative Total: </span>
-              <span className="font-semibold text-blue-600">{data.cumulativeKwh.toFixed(2)} {dataPointConfig.unit}</span>
+              <span className="text-gray-600">Cumulative to Date: </span>
+              <span className="font-semibold text-blue-600">{data.cumulativeKwh?.toFixed(2)} kWh</span>
             </p>
-            {data.growth && parseFloat(data.growth) !== 0 && (
-              <p className="text-sm">
-                <span className="text-gray-600">Monthly Growth: </span>
-                <span className={`font-semibold ${parseFloat(data.growth) > 0 ? 'text-green-600' : 'text-red-600'}`}>
-                  {parseFloat(data.growth) > 0 ? '↑' : '↓'} {Math.abs(parseFloat(data.growth))}%
-                </span>
-              </p>
+            {data.monthNum > 1 && (
+              <div className="text-xs text-gray-500 mt-2 border-t border-gray-100 pt-2">
+                <span>Calculation: Current Cumulative - Previous Cumulative</span>
+              </div>
             )}
-            <p className="text-xs text-gray-500 mt-2">Click for more details</p>
           </div>
         </div>
       );
@@ -458,7 +477,7 @@ const MonthlyEnergyAnalytics: React.FC = () => {
             </button>
           </div>
         )}
-
+        
         <div style={{ height: chartHeight, width: '100%' }}>
           <ResponsiveContainer width="100%" height="100%">
             {chartType === 'bar' ? (
@@ -467,23 +486,23 @@ const MonthlyEnergyAnalytics: React.FC = () => {
                 margin={{ top: 20, right: 30, left: 20, bottom: 20 }}
                 onClick={(data) => {
                   if (data && data.activePayload) {
-                    setSelectedMonth(data.activePayload[0].payload.month);
+                    setSelectedMonth(data.activePayload[0].payload.time_stamp);
                   }
                 }}
               >
                 <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                <XAxis
-                  dataKey="shortDate"
+                <XAxis 
+                  dataKey="shortDate" 
                   angle={-45}
                   textAnchor="end"
                   height={60}
                   tick={{ fontSize: 12 }}
                 />
-                <YAxis
+                <YAxis 
                   tickFormatter={(value) => value.toLocaleString()}
-                  label={{
-                    value: `Monthly Energy (${dataPointConfig.unit})`,
-                    angle: -90,
+                  label={{ 
+                    value: 'Monthly Energy (kWh)', 
+                    angle: -90, 
                     position: 'insideLeft',
                     offset: 10,
                     style: { textAnchor: 'middle' }
@@ -491,24 +510,26 @@ const MonthlyEnergyAnalytics: React.FC = () => {
                 />
                 <Tooltip content={<CustomTooltip />} />
                 <Legend />
-                <Bar
-                  dataKey="energy"
-                  name={`Monthly Production (${dataPointConfig.unit})`}
-                  fill={dataPointConfig.color}
+                <Bar 
+                  dataKey="energy" 
+                  name="Monthly Generation (kWh)"
+                  fill="#10B981"
                   radius={[4, 4, 0, 0]}
                   fillOpacity={0.8}
                 />
-                <ReferenceLine
-                  y={stats?.avg}
-                  stroke="#666"
-                  strokeDasharray="3 3"
-                  label={{
-                    value: `Avg: ${stats?.avg.toFixed(1)}`,
-                    position: 'right',
-                    fill: '#666',
-                    fontSize: 12
-                  }}
-                />
+                {stats && (
+                  <ReferenceLine 
+                    y={stats.averageMonthly} 
+                    stroke="#3B82F6" 
+                    strokeDasharray="3 3"
+                    label={{ 
+                      value: `Avg: ${stats.averageMonthly} kWh`, 
+                      position: 'right',
+                      fill: '#3B82F6',
+                      fontSize: 12
+                    }}
+                  />
+                )}
               </BarChart>
             ) : chartType === 'line' ? (
               <LineChart
@@ -516,23 +537,23 @@ const MonthlyEnergyAnalytics: React.FC = () => {
                 margin={{ top: 20, right: 30, left: 20, bottom: 20 }}
                 onClick={(data) => {
                   if (data && data.activePayload) {
-                    setSelectedMonth(data.activePayload[0].payload.month);
+                    setSelectedMonth(data.activePayload[0].payload.time_stamp);
                   }
                 }}
               >
                 <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                <XAxis
-                  dataKey="shortDate"
+                <XAxis 
+                  dataKey="shortDate" 
                   angle={-45}
                   textAnchor="end"
                   height={60}
                   tick={{ fontSize: 12 }}
                 />
-                <YAxis
+                <YAxis 
                   tickFormatter={(value) => value.toLocaleString()}
-                  label={{
-                    value: `Monthly Energy (${dataPointConfig.unit})`,
-                    angle: -90,
+                  label={{ 
+                    value: 'Monthly Energy (kWh)', 
+                    angle: -90, 
                     position: 'insideLeft',
                     offset: 10,
                     style: { textAnchor: 'middle' }
@@ -540,28 +561,15 @@ const MonthlyEnergyAnalytics: React.FC = () => {
                 />
                 <Tooltip content={<CustomTooltip />} />
                 <Legend />
-                <Line
-                  type="monotone"
-                  dataKey="energy"
-                  name={`Monthly Production (${dataPointConfig.unit})`}
-                  stroke={dataPointConfig.color}
+                <Line 
+                  type="monotone" 
+                  dataKey="energy" 
+                  name="Monthly Generation (kWh)"
+                  stroke="#10B981"
                   strokeWidth={3}
-                  dot={{ stroke: dataPointConfig.color, strokeWidth: 2, r: 4 }}
+                  dot={{ stroke: '#10B981', strokeWidth: 2, r: 4 }}
                   activeDot={{ r: 8, strokeWidth: 2 }}
                 />
-                {stats && (
-                  <ReferenceLine
-                    y={stats.avg}
-                    stroke="#666"
-                    strokeDasharray="3 3"
-                    label={{
-                      value: `Avg: ${stats.avg.toFixed(1)}`,
-                      position: 'right',
-                      fill: '#666',
-                      fontSize: 12
-                    }}
-                  />
-                )}
               </LineChart>
             ) : (
               <AreaChart
@@ -569,29 +577,29 @@ const MonthlyEnergyAnalytics: React.FC = () => {
                 margin={{ top: 20, right: 30, left: 20, bottom: 20 }}
                 onClick={(data) => {
                   if (data && data.activePayload) {
-                    setSelectedMonth(data.activePayload[0].payload.month);
+                    setSelectedMonth(data.activePayload[0].payload.time_stamp);
                   }
                 }}
               >
                 <defs>
                   <linearGradient id="colorEnergy" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor={dataPointConfig.color} stopOpacity={0.8} />
-                    <stop offset="95%" stopColor={dataPointConfig.color} stopOpacity={0.1} />
+                    <stop offset="5%" stopColor="#10B981" stopOpacity={0.8}/>
+                    <stop offset="95%" stopColor="#10B981" stopOpacity={0.1}/>
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                <XAxis
-                  dataKey="shortDate"
+                <XAxis 
+                  dataKey="shortDate" 
                   angle={-45}
                   textAnchor="end"
                   height={60}
                   tick={{ fontSize: 12 }}
                 />
-                <YAxis
+                <YAxis 
                   tickFormatter={(value) => value.toLocaleString()}
-                  label={{
-                    value: `Monthly Energy (${dataPointConfig.unit})`,
-                    angle: -90,
+                  label={{ 
+                    value: 'Monthly Energy (kWh)', 
+                    angle: -90, 
                     position: 'insideLeft',
                     offset: 10,
                     style: { textAnchor: 'middle' }
@@ -599,33 +607,20 @@ const MonthlyEnergyAnalytics: React.FC = () => {
                 />
                 <Tooltip content={<CustomTooltip />} />
                 <Legend />
-                <Area
-                  type="monotone"
-                  dataKey="energy"
-                  name={`Monthly Production (${dataPointConfig.unit})`}
-                  stroke={dataPointConfig.color}
+                <Area 
+                  type="monotone" 
+                  dataKey="energy" 
+                  name="Monthly Generation (kWh)"
+                  stroke="#10B981"
                   strokeWidth={2}
                   fill="url(#colorEnergy)"
                 />
-                {stats && (
-                  <ReferenceLine
-                    y={stats.avg}
-                    stroke="#666"
-                    strokeDasharray="3 3"
-                    label={{
-                      value: `Avg: ${stats.avg.toFixed(1)}`,
-                      position: 'right',
-                      fill: '#666',
-                      fontSize: 12
-                    }}
-                  />
-                )}
-                <Brush dataKey="shortDate" height={30} stroke={dataPointConfig.color} />
+                <Brush dataKey="shortDate" height={30} stroke="#10B981" />
               </AreaChart>
             )}
           </ResponsiveContainer>
         </div>
-
+        
         {/* Chart controls */}
         <div className="flex flex-wrap items-center justify-between gap-3 mt-4 p-3 bg-gray-50 rounded-lg">
           <div className="flex items-center gap-2">
@@ -633,37 +628,40 @@ const MonthlyEnergyAnalytics: React.FC = () => {
             <div className="flex bg-gray-100 rounded-lg p-1">
               <button
                 onClick={() => setChartType('bar')}
-                className={`px-3 py-1.5 rounded-md text-sm font-medium transition flex items-center gap-1.5 ${chartType === 'bar'
-                  ? 'bg-white text-gray-900 shadow-sm'
-                  : 'text-gray-600 hover:text-gray-900'
-                  }`}
+                className={`px-3 py-1.5 rounded-md text-sm font-medium transition flex items-center gap-1.5 ${
+                  chartType === 'bar'
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
               >
                 <BarChart3 className="w-4 h-4" />
                 Bar
               </button>
               <button
                 onClick={() => setChartType('line')}
-                className={`px-3 py-1.5 rounded-md text-sm font-medium transition flex items-center gap-1.5 ${chartType === 'line'
-                  ? 'bg-white text-gray-900 shadow-sm'
-                  : 'text-gray-600 hover:text-gray-900'
-                  }`}
+                className={`px-3 py-1.5 rounded-md text-sm font-medium transition flex items-center gap-1.5 ${
+                  chartType === 'line'
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
               >
                 <LineChartIcon className="w-4 h-4" />
                 Line
               </button>
               <button
                 onClick={() => setChartType('area')}
-                className={`px-3 py-1.5 rounded-md text-sm font-medium transition flex items-center gap-1.5 ${chartType === 'area'
-                  ? 'bg-white text-gray-900 shadow-sm'
-                  : 'text-gray-600 hover:text-gray-900'
-                  }`}
+                className={`px-3 py-1.5 rounded-md text-sm font-medium transition flex items-center gap-1.5 ${
+                  chartType === 'area'
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
               >
                 <TrendingUp className="w-4 h-4" />
                 Area
               </button>
             </div>
           </div>
-
+          
           <div className="flex items-center gap-2">
             <button
               onClick={() => setIsChartFullScreen(!isChartFullScreen)}
@@ -681,10 +679,10 @@ const MonthlyEnergyAnalytics: React.FC = () => {
                 </>
               )}
             </button>
-
+            
             <button
               onClick={exportToCSV}
-              disabled={!monthlyData}
+              disabled={!energyData}
               className="px-3 py-1.5 text-sm bg-green-600 hover:bg-green-700 text-white rounded-lg transition flex items-center gap-1.5"
             >
               <Download className="w-4 h-4" />
@@ -692,30 +690,29 @@ const MonthlyEnergyAnalytics: React.FC = () => {
             </button>
           </div>
         </div>
-
-        {/* Chart insights */}
+        
+        {/* Data insights */}
         {stats && (
           <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-3">
             <div className="bg-white p-3 rounded-lg border border-gray-200">
+              <p className="text-xs text-gray-500 mb-1">Total Monthly Energy</p>
+              <p className="font-semibold text-gray-900">{stats.totalMonthlyEnergy} kWh</p>
+              <p className="text-sm text-gray-600">Sum of all months</p>
+            </div>
+            <div className="bg-white p-3 rounded-lg border border-gray-200">
+              <p className="text-xs text-gray-500 mb-1">Average Monthly</p>
+              <p className="font-semibold text-green-600">{stats.averageMonthly} kWh</p>
+              <p className="text-sm text-gray-600">Monthly average</p>
+            </div>
+            <div className="bg-white p-3 rounded-lg border border-gray-200">
               <p className="text-xs text-gray-500 mb-1">Peak Month</p>
-              <p className="font-semibold text-gray-900">{stats.maxMonth}</p>
-              <p className="text-sm text-green-600">{stats.max.toFixed(1)} kWh</p>
+              <p className="font-semibold text-amber-600">{stats.maxMonthly} kWh</p>
+              <p className="text-sm text-gray-600">Highest generation</p>
             </div>
             <div className="bg-white p-3 rounded-lg border border-gray-200">
-              <p className="text-xs text-gray-500 mb-1">Monthly Average</p>
-              <p className="font-semibold text-gray-900">{stats.avg.toFixed(1)} kWh</p>
-            </div>
-            <div className="bg-white p-3 rounded-lg border border-gray-200">
-              <p className="text-xs text-gray-500 mb-1">Total Production</p>
-              <p className="font-semibold text-gray-900">{stats.sum.toFixed(1)} kWh</p>
-              <p className="text-xs text-gray-400">Cumulative: {stats.totalCumulativeKwh.toFixed(1)} kWh</p>
-            </div>
-            <div className="bg-white p-3 rounded-lg border border-gray-200">
-              <p className="text-xs text-gray-500 mb-1">Trend</p>
-              <p className={`font-semibold ${parseFloat(stats.trendSlope) > 0 ? 'text-green-600' : 'text-red-600'}`}>
-                {parseFloat(stats.trendSlope) > 0 ? '↗' : '↘'} {stats.trendSlope}%
-              </p>
-              <p className="text-sm text-gray-600">per month trend</p>
+              <p className="text-xs text-gray-500 mb-1">Conversion</p>
+              <p className="font-semibold text-blue-600">Cumulative → Monthly</p>
+              <p className="text-sm text-gray-600">Current - Previous</p>
             </div>
           </div>
         )}
@@ -733,16 +730,16 @@ const MonthlyEnergyAnalytics: React.FC = () => {
               <div>
                 <h1 className="text-2xl md:text-3xl font-bold text-gray-900 flex items-center gap-3">
                   <BarChart3 className="w-8 h-8 text-blue-600" />
-                  Monthly Energy Analytics
-                  <span className="text-sm bg-green-100 text-green-800 px-2 py-1 rounded-full">
-                    Wh→kWh then Calculate Monthly
+                  Monthly Energy Generation
+                  <span className="text-sm bg-blue-100 text-blue-800 px-2 py-1 rounded-full">
+                    Cumulative → Monthly Conversion
                   </span>
                 </h1>
                 <p className="text-gray-600 mt-2">
-                  API data in Wh → Convert to kWh (÷1000) → Monthly = Current Cumulative - Previous Cumulative
+                  Convert YTD cumulative values to monthly generation: Current Month - Previous Month
                 </p>
               </div>
-
+              
               <div className="flex items-center gap-3">
                 {loginData && (
                   <div className="flex items-center gap-3 bg-white px-4 py-2 rounded-lg shadow-sm border border-gray-200">
@@ -756,7 +753,7 @@ const MonthlyEnergyAnalytics: React.FC = () => {
                     <CheckCircle className="w-4 h-4 text-green-500" />
                   </div>
                 )}
-
+                
                 <button
                   onClick={handleLogin}
                   disabled={loading.login}
@@ -777,7 +774,7 @@ const MonthlyEnergyAnalytics: React.FC = () => {
                   {formData.ps_key}
                 </span>
               </div>
-
+              
               <div className="flex items-center gap-2 px-4 py-2 bg-white rounded-lg border border-gray-200 shadow-sm">
                 <Calendar className="w-4 h-4 text-blue-500" />
                 <span className="text-sm font-medium text-gray-700">Period</span>
@@ -785,17 +782,17 @@ const MonthlyEnergyAnalytics: React.FC = () => {
                   {monthNames[parseInt(formData.start_month) - 1]} {formData.start_year} - {monthNames[parseInt(formData.end_month) - 1]} {formData.end_year}
                 </span>
               </div>
-
+              
               <div className="flex items-center gap-2 px-4 py-2 bg-white rounded-lg border border-gray-200 shadow-sm">
-                <IconComponent className="w-4 h-4" style={{ color: dataPointConfig.color }} />
-                <span className="text-sm font-medium text-gray-700">Parameter</span>
-                <span className="text-sm text-gray-900">{dataPointConfig.label}</span>
+                <Battery className="w-4 h-4 text-green-500" />
+                <span className="text-sm font-medium text-gray-700">Data Point</span>
+                <span className="text-sm text-gray-900">Total Energy</span>
               </div>
-
+              
               <div className="flex items-center gap-2 px-4 py-2 bg-white rounded-lg border border-gray-200 shadow-sm">
                 <Activity className="w-4 h-4 text-purple-500" />
                 <span className="text-sm font-medium text-gray-700">Data Points</span>
-                <span className="text-sm text-gray-900">{monthlyDataArray.length}</span>
+                <span className="text-sm text-gray-900">{monthlyData.length}</span>
               </div>
             </div>
           </div>
@@ -809,7 +806,7 @@ const MonthlyEnergyAnalytics: React.FC = () => {
                   <Filter className="w-5 h-5 text-gray-600" />
                   Data Configuration
                 </h3>
-
+                
                 <div className="space-y-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -824,7 +821,7 @@ const MonthlyEnergyAnalytics: React.FC = () => {
                       placeholder="Enter PS Key"
                     />
                   </div>
-
+                  
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -843,7 +840,7 @@ const MonthlyEnergyAnalytics: React.FC = () => {
                         ))}
                       </select>
                     </div>
-
+                    
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">
                         Start Year
@@ -862,7 +859,7 @@ const MonthlyEnergyAnalytics: React.FC = () => {
                       </select>
                     </div>
                   </div>
-
+                  
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -881,7 +878,7 @@ const MonthlyEnergyAnalytics: React.FC = () => {
                         ))}
                       </select>
                     </div>
-
+                    
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">
                         End Year
@@ -900,7 +897,7 @@ const MonthlyEnergyAnalytics: React.FC = () => {
                       </select>
                     </div>
                   </div>
-
+                  
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
                       Data Point
@@ -967,12 +964,13 @@ const MonthlyEnergyAnalytics: React.FC = () => {
 
                 {/* Fetch Button */}
                 <button
-                  onClick={fetchMonthlyData}
+                  onClick={fetchEnergyData}
                   disabled={loading.data || !loginData}
-                  className={`w-full mt-6 py-3 rounded-lg font-medium transition flex items-center justify-center gap-2 ${loading.data || !loginData
-                    ? 'bg-gray-300 cursor-not-allowed text-gray-500'
-                    : 'bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white shadow-lg hover:shadow-xl'
-                    }`}
+                  className={`w-full mt-6 py-3 rounded-lg font-medium transition flex items-center justify-center gap-2 ${
+                    loading.data || !loginData
+                      ? 'bg-gray-300 cursor-not-allowed text-gray-500'
+                      : 'bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white shadow-lg hover:shadow-xl'
+                  }`}
                 >
                   {loading.data ? (
                     <>
@@ -982,7 +980,7 @@ const MonthlyEnergyAnalytics: React.FC = () => {
                   ) : (
                     <>
                       <RefreshCw className="w-5 h-5" />
-                      Load Monthly Data
+                      Load Energy Data
                     </>
                   )}
                 </button>
@@ -998,32 +996,26 @@ const MonthlyEnergyAnalytics: React.FC = () => {
                 )}
               </div>
 
-              {/* Quick Stats */}
+              {/* Conversion Stats */}
               {stats && (
                 <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
-                  <h3 className="text-lg font-semibold text-gray-900 mb-4">Quick Stats</h3>
+                  <h3 className="text-lg font-semibold text-gray-900 mb-4">Monthly Stats</h3>
                   <div className="space-y-3">
                     <div className="flex justify-between items-center">
                       <span className="text-sm text-gray-600">Months Analyzed</span>
                       <span className="font-semibold text-gray-900">{stats.count}</span>
                     </div>
                     <div className="flex justify-between items-center">
-                      <span className="text-sm text-gray-600">Total Production</span>
-                      <span className="font-semibold text-gray-900">{stats.sum.toFixed(1)} kWh</span>
+                      <span className="text-sm text-gray-600">Total Monthly Energy</span>
+                      <span className="font-semibold text-gray-900">{stats.totalMonthlyEnergy} kWh</span>
                     </div>
                     <div className="flex justify-between items-center">
-                      <span className="text-sm text-gray-600">Monthly Average</span>
-                      <span className="font-semibold text-gray-900">{stats.avg.toFixed(1)} kWh</span>
+                      <span className="text-sm text-gray-600">Average Monthly</span>
+                      <span className="font-semibold text-green-600">{stats.averageMonthly} kWh</span>
                     </div>
                     <div className="flex justify-between items-center">
                       <span className="text-sm text-gray-600">Peak Month</span>
-                      <span className="font-semibold text-gray-900">{stats.maxMonth}</span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-sm text-gray-600">Growth</span>
-                      <span className={`font-semibold ${parseFloat(stats.monthlyGrowth) > 0 ? 'text-green-600' : 'text-red-600'}`}>
-                        {stats.monthlyGrowth}%
-                      </span>
+                      <span className="font-semibold text-amber-600">{stats.maxMonthly} kWh</span>
                     </div>
                   </div>
                 </div>
@@ -1038,33 +1030,35 @@ const MonthlyEnergyAnalytics: React.FC = () => {
                   <div>
                     <h2 className="text-xl font-bold text-gray-900 flex items-center gap-3">
                       <Calendar className="w-6 h-6 text-blue-600" />
-                      Monthly Energy Production
+                      Monthly Energy Generation (kWh)
                       <span className="text-sm bg-blue-100 text-blue-800 px-2 py-1 rounded-full">
-                        Wh→kWh then Subtract Cumulative
+                        Cumulative → Monthly Conversion
                       </span>
                     </h2>
                     <p className="text-gray-600 mt-1">
-                      {monthlyDataArray.length} months of data • {dataPointConfig.label}
+                      {monthlyData.length} months • Formula: Monthly = Current Cumulative - Previous Cumulative
                     </p>
                   </div>
-
+                  
                   <div className="flex items-center gap-3">
                     <div className="flex bg-gray-100 rounded-lg p-1">
                       <button
                         onClick={() => setActiveView('table')}
-                        className={`px-4 py-2 rounded-md text-sm font-medium transition ${activeView === 'table'
-                          ? 'bg-white text-gray-900 shadow-sm'
-                          : 'text-gray-600 hover:text-gray-900'
-                          }`}
+                        className={`px-4 py-2 rounded-md text-sm font-medium transition ${
+                          activeView === 'table'
+                            ? 'bg-white text-gray-900 shadow-sm'
+                            : 'text-gray-600 hover:text-gray-900'
+                        }`}
                       >
                         Table View
                       </button>
                       <button
                         onClick={() => setActiveView('chart')}
-                        className={`px-4 py-2 rounded-md text-sm font-medium transition ${activeView === 'chart'
-                          ? 'bg-white text-gray-900 shadow-sm'
-                          : 'text-gray-600 hover:text-gray-900'
-                          }`}
+                        className={`px-4 py-2 rounded-md text-sm font-medium transition ${
+                          activeView === 'chart'
+                            ? 'bg-white text-gray-900 shadow-sm'
+                            : 'text-gray-600 hover:text-gray-900'
+                        }`}
                       >
                         Chart View
                       </button>
@@ -1084,27 +1078,30 @@ const MonthlyEnergyAnalytics: React.FC = () => {
                             Month
                           </th>
                           <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50">
-                            Monthly Production (kWh)
-                          </th>
-                          <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50">
                             Cumulative (kWh)
                           </th>
                           <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50">
-                            Raw API Value (Wh)
+                            Monthly (kWh)
                           </th>
                           <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50 rounded-r-lg">
-                            Monthly Growth
+                            Calculation
                           </th>
                         </tr>
                       </thead>
                       <tbody>
-                        {monthlyDataArray.map((item, index) => {
+                        {monthlyData.map((item, index) => {
+                          const cumulativeItem = cumulativeDataArray[index] || {};
+                          const calculation = index === 0 
+                            ? 'First month: Monthly = Cumulative'
+                            : `Monthly = ${cumulativeItem.cumulativeKwh?.toFixed(2)} - ${cumulativeDataArray[index - 1]?.cumulativeKwh?.toFixed(2)}`;
+                          
                           return (
-                            <tr
-                              key={item.month}
-                              className={`border-b border-gray-100 hover:bg-gray-50 transition ${selectedMonth === item.month ? 'bg-blue-50' : ''
-                                }`}
-                              onClick={() => setSelectedMonth(item.month)}
+                            <tr 
+                              key={item.time_stamp}
+                              className={`border-b border-gray-100 hover:bg-gray-50 transition ${
+                                selectedMonth === item.time_stamp ? 'bg-blue-50' : ''
+                              }`}
+                              onClick={() => setSelectedMonth(item.time_stamp)}
                             >
                               <td className="py-4 px-4">
                                 <div className="flex items-center gap-3">
@@ -1121,44 +1118,41 @@ const MonthlyEnergyAnalytics: React.FC = () => {
                               </td>
                               <td className="py-4 px-4">
                                 <p className="font-bold text-gray-900 text-lg">
-                                  {item.formattedMonthlyKwh}
+                                  {cumulativeItem.formattedCumulativeKwh || '0.00'} kWh
                                 </p>
-                                <p className="text-sm text-gray-500">
-                                  Monthly kWh
-                                </p>
+                                <p className="text-sm text-gray-500">YTD cumulative</p>
                               </td>
                               <td className="py-4 px-4">
-                                <p className="font-bold text-blue-700 text-lg">
-                                  {item.cumulativeKwh.toFixed(2)}
+                                <p className="font-bold text-green-700 text-lg">
+                                  {item.monthly_energy_kwh.toFixed(2)} kWh
                                 </p>
-                                <p className="text-sm text-gray-500">Cumulative kWh</p>
+                                <p className="text-sm text-gray-500">Monthly generation</p>
                               </td>
                               <td className="py-4 px-4">
-                                <div>
-                                  <p className="font-bold text-gray-700 text-sm">
-                                    {parseFloat(item.rawValue).toLocaleString()} Wh
-                                  </p>
-                                  <p className="text-xs text-gray-500">
-                                    API raw value
-                                  </p>
+                                <div className="text-sm text-gray-600">
+                                  {calculation}
                                 </div>
-                              </td>
-                              <td className="py-4 px-4">
-                                {item.growth && parseFloat(item.growth) !== 0 && (
-                                  <div className={`inline-flex items-center px-3 py-1 rounded-full text-sm ${parseFloat(item.growth) > 0
-                                    ? 'bg-green-100 text-green-800'
-                                    : parseFloat(item.growth) < 0
-                                      ? 'bg-red-100 text-red-800'
-                                      : 'bg-gray-100 text-gray-800'
-                                    }`}>
-                                    <TrendingUp className={`w-4 h-4 mr-1 ${parseFloat(item.growth) > 0 ? 'text-green-600' : 'text-red-600'
-                                      }`} />
-                                    {parseFloat(item.growth) > 0 ? '+' : ''}{item.growth}%
-                                  </div>
-                                )}
-                                {(!item.growth || parseFloat(item.growth) === 0) && (
-                                  <span className="text-sm text-gray-400">—</span>
-                                )}
+                                <div className="flex items-center gap-1 mt-1 text-xs text-gray-500">
+                                  {index === 0 ? (
+                                    <div className="bg-green-100 px-2 py-1 rounded text-green-800">
+                                      First month
+                                    </div>
+                                  ) : (
+                                    <>
+                                      <div className="bg-gray-100 px-2 py-1 rounded">
+                                        {cumulativeItem.cumulativeKwh?.toFixed(2)}
+                                      </div>
+                                      <ArrowRight className="w-3 h-3 text-gray-400" />
+                                      <div className="bg-gray-100 px-2 py-1 rounded">
+                                        {cumulativeDataArray[index - 1]?.cumulativeKwh?.toFixed(2)}
+                                      </div>
+                                      <ArrowRight className="w-3 h-3 text-gray-400" />
+                                      <div className="bg-green-100 px-2 py-1 rounded text-green-800">
+                                        = {item.monthly_energy_kwh.toFixed(2)}
+                                      </div>
+                                    </>
+                                  )}
+                                </div>
                               </td>
                             </tr>
                           );
@@ -1172,11 +1166,11 @@ const MonthlyEnergyAnalytics: React.FC = () => {
               )}
 
               {/* Selected Month Details */}
-              {selectedMonth && monthlyDataArray.find(item => item.month === selectedMonth) && (
+              {selectedMonth && monthlyData.find(item => item.time_stamp === selectedMonth) && (
                 <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
                   <div className="flex items-center justify-between mb-4">
                     <h3 className="text-lg font-semibold text-gray-900">
-                      Details for {monthlyDataArray.find(item => item.month === selectedMonth)?.monthName} {monthlyDataArray.find(item => item.month === selectedMonth)?.year}
+                      Conversion Details for {monthlyData.find(item => item.time_stamp === selectedMonth)?.monthName} {monthlyData.find(item => item.time_stamp === selectedMonth)?.year}
                     </h3>
                     <button
                       onClick={() => setSelectedMonth('')}
@@ -1185,52 +1179,58 @@ const MonthlyEnergyAnalytics: React.FC = () => {
                       ✕
                     </button>
                   </div>
-
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                     <div className="bg-blue-50 rounded-lg p-4">
-                      <p className="text-sm text-gray-600 mb-1">Monthly Production</p>
+                      <p className="text-sm text-gray-600 mb-1">Current Cumulative (kWh)</p>
                       <p className="text-xl font-bold text-gray-900">
-                        {monthlyDataArray.find(item => item.month === selectedMonth)?.formattedMonthlyKwh} kWh
+                        {cumulativeDataArray.find(item => item.month === selectedMonth)?.formattedCumulativeKwh}
                       </p>
                       <p className="text-sm text-gray-500 mt-1">
-                        Current Cumulative - Previous Cumulative
+                        Cumulative value for this month
                       </p>
                     </div>
-
-                    <div className="bg-purple-50 rounded-lg p-4">
-                      <p className="text-sm text-gray-600 mb-1">Cumulative Total</p>
-                      <p className="text-xl font-bold text-purple-700">
-                        {monthlyDataArray.find(item => item.month === selectedMonth)?.cumulativeKwh.toFixed(2)} kWh
-                      </p>
-                      <p className="text-sm text-gray-500 mt-1">
-                        Running Total (API Wh ÷ 1000)
-                      </p>
-                    </div>
-
+                    
                     <div className="bg-green-50 rounded-lg p-4">
-                      <p className="text-sm text-gray-600 mb-1">Raw API Value</p>
+                      <p className="text-sm text-gray-600 mb-1">Monthly Generation (kWh)</p>
                       <p className="text-xl font-bold text-green-700">
-                        {monthlyDataArray.find(item => item.month === selectedMonth)?.rawValue} Wh
+                        {monthlyData.find(item => item.time_stamp === selectedMonth)?.monthly_energy_kwh.toFixed(2)}
                       </p>
                       <p className="text-sm text-gray-500 mt-1">
-                        Original API data
+                        Energy generated this month
                       </p>
                     </div>
-
-                    <div className="bg-amber-50 rounded-lg p-4">
-                      <p className="text-sm text-gray-600 mb-1">Monthly Growth</p>
-                      <p className={`text-xl font-bold ${monthlyDataArray.find(item => item.month === selectedMonth)?.growth &&
-                        parseFloat(monthlyDataArray.find(item => item.month === selectedMonth)?.growth || '0') > 0
-                        ? 'text-green-700'
-                        : 'text-red-700'
-                        }`}>
-                        {monthlyDataArray.find(item => item.month === selectedMonth)?.growth &&
-                          parseFloat(monthlyDataArray.find(item => item.month === selectedMonth)?.growth || '0') !== 0
-                          ? `${parseFloat(monthlyDataArray.find(item => item.month === selectedMonth)?.growth || '0') > 0 ? '+' : ''}${monthlyDataArray.find(item => item.month === selectedMonth)?.growth}%`
-                          : '0%'}
+                    
+                    <div className="bg-purple-50 rounded-lg p-4">
+                      <p className="text-sm text-gray-600 mb-1">Previous Cumulative (kWh)</p>
+                      <p className="text-xl font-bold text-purple-700">
+                        {(() => {
+                          const index = monthlyData.findIndex(item => item.time_stamp === selectedMonth);
+                          return index > 0 
+                            ? cumulativeDataArray[index - 1]?.formattedCumulativeKwh || 'N/A'
+                            : 'First month';
+                        })()}
                       </p>
                       <p className="text-sm text-gray-500 mt-1">
-                        vs Previous Month's Monthly Value
+                        Previous month's cumulative
+                      </p>
+                    </div>
+                    
+                    <div className="bg-amber-50 rounded-lg p-4">
+                      <p className="text-sm text-gray-600 mb-1">Calculation Type</p>
+                      <p className="text-xl font-bold text-amber-700">
+                        {(() => {
+                          const index = monthlyData.findIndex(item => item.time_stamp === selectedMonth);
+                          return index === 0 ? 'First Month' : 'Monthly Difference';
+                        })()}
+                      </p>
+                      <p className="text-sm text-gray-500 mt-1">
+                        {(() => {
+                          const index = monthlyData.findIndex(item => item.time_stamp === selectedMonth);
+                          return index === 0 
+                            ? 'Monthly = Cumulative' 
+                            : 'Current - Previous';
+                        })()}
                       </p>
                     </div>
                   </div>
@@ -1238,7 +1238,7 @@ const MonthlyEnergyAnalytics: React.FC = () => {
               )}
 
               {/* Raw JSON Display */}
-              {monthlyData && !isChartFullScreen && (
+              {energyData && !isChartFullScreen && (
                 <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
                   <button
                     onClick={() => setShowRawJson(!showRawJson)}
@@ -1252,20 +1252,20 @@ const MonthlyEnergyAnalytics: React.FC = () => {
                     </div>
                     <ChevronRight className={`w-4 h-4 transition-transform ${showRawJson ? 'rotate-90' : ''}`} />
                   </button>
-
+                  
                   {showRawJson && (
                     <div className="mt-4">
                       <div className="flex items-center justify-between mb-3">
-                        <span className="text-sm font-medium text-gray-700">API Response Data (Cumulative Values in Wh)</span>
+                        <span className="text-sm font-medium text-gray-700">API Response Data (Values in Wh)</span>
                         <button
-                          onClick={() => navigator.clipboard.writeText(JSON.stringify(monthlyData, null, 2))}
+                          onClick={() => navigator.clipboard.writeText(JSON.stringify(energyData, null, 2))}
                           className="px-3 py-1 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition"
                         >
                           Copy JSON
                         </button>
                       </div>
                       <pre className="bg-gray-900 text-green-400 p-4 rounded-lg overflow-auto max-h-96 text-sm">
-                        {JSON.stringify(monthlyData, null, 2)}
+                        {JSON.stringify(energyData, null, 2)}
                       </pre>
                     </div>
                   )}
@@ -1273,14 +1273,14 @@ const MonthlyEnergyAnalytics: React.FC = () => {
               )}
 
               {/* Empty State */}
-              {!monthlyData && !loading.data && !isChartFullScreen && (
+              {!energyData && !loading.data && !isChartFullScreen && (
                 <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8 text-center">
                   <div className="w-20 h-20 mx-auto mb-4 rounded-full bg-gradient-to-r from-blue-100 to-blue-50 flex items-center justify-center">
                     <Calendar className="w-10 h-10 text-blue-600" />
                   </div>
-                  <h3 className="text-xl font-semibold text-gray-900 mb-2">No Monthly Data Loaded</h3>
+                  <h3 className="text-xl font-semibold text-gray-900 mb-2">No Energy Data Loaded</h3>
                   <p className="text-gray-600 mb-6 max-w-md mx-auto">
-                    Configure your parameters and click "Load Monthly Data" to analyze monthly energy production
+                    Configure your parameters and click "Load Energy Data" to convert cumulative values to monthly generation
                   </p>
                   <div className="flex items-center justify-center gap-4 text-sm text-gray-500">
                     <div className="flex items-center gap-2">
@@ -1303,15 +1303,15 @@ const MonthlyEnergyAnalytics: React.FC = () => {
 
           {/* Footer */}
           <div className="mt-8 pt-6 border-t border-gray-200 text-center text-sm text-gray-500">
-            <p>Monthly Energy Analytics • Wh→kWh Conversion then Cumulative Subtraction • Powered by RBP India Solar Solutions</p>
+            <p>Monthly Energy Generation • Cumulative → Monthly Conversion (Current - Previous) • Powered by RBP India Solar Solutions</p>
             <p className="mt-1">Data updates on request • {new Date().toLocaleDateString()}</p>
           </div>
         </div>
       )}
-
+      
       {isChartFullScreen && renderChart()}
     </div>
   );
 };
 
-export default MonthlyEnergyAnalytics;
+export default CumulativeEnergyDisplay;

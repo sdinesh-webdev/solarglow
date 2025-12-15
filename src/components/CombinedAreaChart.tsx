@@ -18,7 +18,13 @@ import {
   Sun,
   Moon,
   Cloud,
-  Layers
+  Layers,
+  Key,
+  Cpu,
+  Search,
+  Database,
+  Server,
+  HardDrive
 } from 'lucide-react';
 import { useDeviceContext } from '../context/DeviceContext';
 
@@ -83,6 +89,15 @@ interface DailyDataItem {
   isToday?: boolean;
 }
 
+interface YearlyDataItem {
+  year: string;
+  value: number;
+  formattedValue: string;
+  rawValue: string;
+  kwhValue: number;
+  formattedYear: string;
+}
+
 interface LoginResponse {
   result_code: string;
   result_msg: string;
@@ -94,18 +109,65 @@ interface LoginResponse {
   } | null;
 }
 
+interface DevicePoint {
+  ps_key: string;
+  uuid: number;
+  p1: string | null;
+  p2: string | null;
+  p4: string | null;
+  p5: string | null;
+  p6: string | null;
+  p14: string | null;
+  p15: string | null;
+  p16: string | null;
+  p17: string | null;
+  p18: string | null;
+  p19: string | null;
+  p20: string | null;
+  p21: string | null;
+  p22: string | null;
+  p23: string | null;
+  p24: string | null;
+  p25: string | null;
+  p26: string | null;
+  p27: string | null;
+  p43: string | null;
+  p87: string | null;
+  p88: string | null;
+  device_name: string;
+  device_sn: string;
+  dev_status: number;
+  dev_fault_status: number;
+  device_time: string;
+  communication_dev_sn: string;
+}
+
+interface DeviceDataResponse {
+  req_serial_num: string;
+  result_code: string;
+  result_msg: string;
+  result_data: {
+    fail_sn_list: any[];
+    device_point_list: Array<{
+      device_point: DevicePoint;
+    }>;
+  };
+}
+
 const CombinedAreaChart: React.FC = () => {
   // Context
-  const { psKey } = useDeviceContext();
+  const { psKey, setPsKey } = useDeviceContext();
   
   // Main state
-  const [viewMode, setViewMode] = useState<'minute' | 'daily' | 'monthly'>('minute');
+  const [viewMode, setViewMode] = useState<'minute' | 'daily' | 'monthly' | 'yearly'>('minute');
   const [token, setToken] = useState<string>('');
   const [loading, setLoading] = useState({
     login: false,
     minute: false,
     daily: false,
-    monthly: false
+    monthly: false,
+    yearly: false,
+    device: false
   });
   const [error, setError] = useState<string>('');
   
@@ -113,6 +175,8 @@ const CombinedAreaChart: React.FC = () => {
   const [minuteData, setMinuteData] = useState<MinuteDataResponse | null>(null);
   const [dailyData, setDailyData] = useState<HistoricalDataResponse | null>(null);
   const [monthlyData, setMonthlyData] = useState<HistoricalDataResponse | null>(null);
+  const [yearlyData, setYearlyData] = useState<HistoricalDataResponse | null>(null);
+  const [deviceData, setDeviceData] = useState<DevicePoint | null>(null);
   
   // Form states
   const [minuteForm, setMinuteForm] = useState({
@@ -147,6 +211,16 @@ const CombinedAreaChart: React.FC = () => {
     order: '0'
   });
 
+  const [yearlyForm, setYearlyForm] = useState({
+    ps_key: psKey || '1589518_1_1_1',
+    data_point: 'p2',
+    start_year: '',
+    end_year: '',
+    data_type: '2',
+    query_type: '3',
+    order: '0'
+  });
+
   // UI states
   const [selectedParameter, setSelectedParameter] = useState('p24');
   const [chartType, setChartType] = useState<'area' | 'line' | 'bar'>('area');
@@ -172,6 +246,23 @@ const CombinedAreaChart: React.FC = () => {
     endYear: '2025',
     endMonth: '12'
   });
+
+  const [yearRange, setYearRange] = useState({
+    startYear: '2022',
+    endYear: '2025'
+  });
+
+  // Auto login and serial number states
+  const [autoLoginEnabled, setAutoLoginEnabled] = useState<boolean>(() => {
+    const saved = localStorage.getItem('autoLoginEnabled');
+    return saved ? JSON.parse(saved) : true;
+  });
+  
+  const [serialNumber, setSerialNumber] = useState<string>(() => {
+    return localStorage.getItem('serialNumber') || 'I2460100212';
+  });
+  
+  const [showDeviceDetails, setShowDeviceDetails] = useState(false);
 
   // Chart config
   const [chartConfig, setChartConfig] = useState({
@@ -204,7 +295,17 @@ const CombinedAreaChart: React.FC = () => {
     'Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'
   ];
 
-  // Initialize dates on mount
+  // Save auto login preference to localStorage
+  useEffect(() => {
+    localStorage.setItem('autoLoginEnabled', JSON.stringify(autoLoginEnabled));
+  }, [autoLoginEnabled]);
+
+  // Save serial number to localStorage
+  useEffect(() => {
+    localStorage.setItem('serialNumber', serialNumber);
+  }, [serialNumber]);
+
+  // Initialize dates and auto login on mount
   useEffect(() => {
     const now = new Date();
     const twoHoursAgo = new Date(now.getTime() - 2 * 60 * 60 * 1000);
@@ -285,30 +386,53 @@ const CombinedAreaChart: React.FC = () => {
       end_month: currentMonth
     }));
 
-    // Auto login
-    handleLogin();
+    // Set default year range for yearly view (last 4 years)
+    setYearRange({
+      startYear: (parseInt(currentYear) - 3).toString(),
+      endYear: currentYear
+    });
+
+    setYearlyForm(prev => ({
+      ...prev,
+      start_year: (parseInt(currentYear) - 3).toString(),
+      end_year: currentYear
+    }));
+
+    // Auto login if enabled
+    if (autoLoginEnabled) {
+      handleLogin();
+    }
   }, []);
 
-  // Update PS Key from context
+  // Update PS Key from context and fetch device data if available
   useEffect(() => {
     if (psKey) {
       setMinuteForm(prev => ({ ...prev, ps_key_list: psKey }));
       setDailyForm(prev => ({ ...prev, ps_key: psKey }));
       setMonthlyForm(prev => ({ ...prev, ps_key: psKey }));
+      setYearlyForm(prev => ({ ...prev, ps_key: psKey }));
+      
+      // If we have a token, try to fetch device data
+      if (token) {
+        fetchDeviceDataByPsKey();
+      }
     }
-  }, [psKey]);
+  }, [psKey, token]);
 
   // Format date for API based on query_type
   const formatDateForAPI = (date: Date, queryType: string): string => {
     const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
     
     switch (queryType) {
-      case '1': return `${year}${month}${day}`; // Daily
-      case '2': return `${year}${month}`;       // Monthly
-      case '3': return `${year}`;               // Yearly
-      default: return `${year}${month}${day}`;
+      case '1': // Daily: YYYYMMDD
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return `${year}${month}${day}`;
+      case '2': // Monthly: YYYYMM
+        return `${year}${String(date.getMonth() + 1).padStart(2, '0')}`;
+      case '3': // Yearly: YYYY
+        return `${year}`;
+      default: return `${year}`;
     }
   };
 
@@ -325,8 +449,8 @@ const CombinedAreaChart: React.FC = () => {
     }
   };
 
-  // Login function
-  const handleLogin = async () => {
+  // Login function with auto-retry
+  const handleLogin = async (retryCount = 0) => {
     setLoading(prev => ({ ...prev, login: true }));
     setError('');
 
@@ -349,14 +473,119 @@ const CombinedAreaChart: React.FC = () => {
       if (result.result_code === "1") {
         setToken(result.result_data?.token || '');
         console.log('Login successful, token set');
+        
+        // If we have a serial number, fetch device data
+        if (serialNumber) {
+          fetchDeviceDataBySerial(result.result_data?.token || '');
+        }
       } else {
+        // Retry logic for transient failures
+        if (retryCount < 2 && result.result_msg.includes('busy')) {
+          console.log(`Retry ${retryCount + 1} after busy error`);
+          setTimeout(() => handleLogin(retryCount + 1), 2000);
+          return;
+        }
         setError(`Login failed: ${result.result_msg}`);
       }
     } catch (err: any) {
+      // Retry logic for network errors
+      if (retryCount < 2) {
+        console.log(`Retry ${retryCount + 1} after error:`, err.message);
+        setTimeout(() => handleLogin(retryCount + 1), 2000);
+        return;
+      }
       console.error('Login error details:', err);
       setError(`Login error: ${err.message || 'Unknown error'}`);
     } finally {
       setLoading(prev => ({ ...prev, login: false }));
+    }
+  };
+
+  // Fetch device data by serial number
+  const fetchDeviceDataBySerial = async (tokenParam?: string) => {
+    const actualToken = tokenParam || token;
+    
+    if (!actualToken) {
+      setError('No login token available. Please login first.');
+      return;
+    }
+
+    if (!serialNumber.trim()) {
+      setError('Please enter a serial number');
+      return;
+    }
+
+    setLoading(prev => ({ ...prev, device: true }));
+    setError('');
+
+    try {
+      const response = await fetch('http://localhost:3000/api/solar/inverter-data', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token: actualToken,
+          sn_list: [serialNumber.trim()]
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const result: DeviceDataResponse = await response.json();
+      
+      if (result.result_code === "1") {
+        const devicePoint = result.result_data?.device_point_list?.[0]?.device_point;
+        if (devicePoint) {
+          setDeviceData(devicePoint);
+          const newPsKey = devicePoint.ps_key;
+          setPsKey(newPsKey); // Update context
+          console.log('Device data fetched, PS Key:', newPsKey);
+          setShowDeviceDetails(true);
+        } else {
+          setError('No device data found for the serial number');
+        }
+      } else {
+        setError(`Device fetch failed: ${result.result_msg}`);
+      }
+    } catch (err: any) {
+      console.error('Device fetch error:', err);
+      setError(`Device fetch error: ${err.message || 'Unknown error'}`);
+    } finally {
+      setLoading(prev => ({ ...prev, device: false }));
+    }
+  };
+
+  // Fetch device data by PS Key (for when PS Key is already known)
+  const fetchDeviceDataByPsKey = async () => {
+    if (!token) {
+      return;
+    }
+
+    setLoading(prev => ({ ...prev, device: true }));
+
+    try {
+      // This is a simplified version - you might need to adjust the API endpoint
+      // based on what's available in your backend
+      const response = await fetch('http://localhost:3000/api/solar/inverter-data-by-pskey', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token: token,
+          ps_key: psKey
+        })
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        if (result.result_code === "1") {
+          setDeviceData(result.result_data?.device_point);
+        }
+      }
+    } catch (err) {
+      console.error('Error fetching device data by PS Key:', err);
+    } finally {
+      setLoading(prev => ({ ...prev, device: false }));
     }
   };
 
@@ -415,6 +644,17 @@ const CombinedAreaChart: React.FC = () => {
       }));
     }
   }, [monthRange]);
+
+  // Update yearly form when year range changes
+  useEffect(() => {
+    if (yearRange.startYear && yearRange.endYear) {
+      setYearlyForm(prev => ({
+        ...prev,
+        start_year: yearRange.startYear,
+        end_year: yearRange.endYear
+      }));
+    }
+  }, [yearRange]);
 
   // Fetch minute data
   const fetchMinuteData = async () => {
@@ -574,6 +814,46 @@ const CombinedAreaChart: React.FC = () => {
     }
   };
 
+  // Fetch yearly data
+  const fetchYearlyData = async () => {
+    if (!token) {
+      setError('No login token available');
+      return;
+    }
+
+    setLoading(prev => ({ ...prev, yearly: true }));
+    setError('');
+
+    try {
+      const response = await fetch('http://localhost:3000/api/solar/historical-data', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token: token,
+          ps_key_list: [yearlyForm.ps_key],
+          data_point: yearlyForm.data_point,
+          start_time: yearlyForm.start_year,
+          end_time: yearlyForm.end_year,
+          data_type: yearlyForm.data_type,
+          query_type: yearlyForm.query_type,
+          order: yearlyForm.order
+        })
+      });
+
+      const result: HistoricalDataResponse = await response.json();
+      
+      if (result.result_code === "1") {
+        setYearlyData(result);
+      } else {
+        setError('API Error: ' + result.result_msg);
+      }
+    } catch (err) {
+      setError('Fetch error: ' + (err as Error).message);
+    } finally {
+      setLoading(prev => ({ ...prev, yearly: false }));
+    }
+  };
+
   // Format minute data for chart
   const formatMinuteData = () => {
     if (!minuteData || !minuteData.result_data) {
@@ -709,6 +989,37 @@ const CombinedAreaChart: React.FC = () => {
     });
   };
 
+  // Format yearly data for chart
+  const formatYearlyData = (): YearlyDataItem[] => {
+    if (!yearlyData || !yearlyData.result_data) return [];
+    
+    const psKey = Object.keys(yearlyData.result_data)[0];
+    if (!psKey) return [];
+    
+    const dataPoint = Object.keys(yearlyData.result_data[psKey])[0];
+    const dataArray = yearlyData.result_data[psKey][dataPoint];
+    
+    return dataArray.map(item => {
+      const year = item.time_stamp;
+      const valueKey = Object.keys(item).find(key => key !== 'time_stamp');
+      const value = valueKey ? parseFloat(item[valueKey]) : 0;
+      
+      return {
+        year,
+        value,
+        formattedValue: value.toLocaleString(undefined, {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2
+        }),
+        rawValue: item[valueKey || ''],
+        kwhValue: value / 1000,
+        formattedYear: year
+      };
+    }).sort((a, b) => {
+      return parseInt(a.year) - parseInt(b.year);
+    });
+  };
+
   // Get parameter configuration
   const getParamConfig = (param: string) => {
     const configs = {
@@ -775,7 +1086,7 @@ const CombinedAreaChart: React.FC = () => {
         minDate: minItem ? minItem.date : '',
         unit: getParamConfig(dailyForm.data_point).unit
       };
-    } else {
+    } else if (viewMode === 'monthly') {
       const data = formatMonthlyData();
       if (data.length === 0) return null;
       
@@ -796,6 +1107,28 @@ const CombinedAreaChart: React.FC = () => {
         maxMonth: maxItem ? `${maxItem.monthName} ${maxItem.year}` : '',
         minMonth: minItem ? `${minItem.monthName} ${minItem.year}` : '',
         unit: getParamConfig(monthlyForm.data_point).unit
+      };
+    } else {
+      const data = formatYearlyData();
+      if (data.length === 0) return null;
+      
+      const values = data.map(d => d.value);
+      const sum = values.reduce((a, b) => a + b, 0);
+      const avg = sum / values.length;
+      const max = Math.max(...values);
+      const min = Math.min(...values);
+      const maxItem = data.find(d => d.value === max);
+      const minItem = data.find(d => d.value === min);
+      
+      return {
+        max,
+        min,
+        avg,
+        sum,
+        count: values.length,
+        maxYear: maxItem ? maxItem.year : '',
+        minYear: minItem ? minItem.year : '',
+        unit: getParamConfig(yearlyForm.data_point).unit
       };
     }
   };
@@ -843,7 +1176,7 @@ const CombinedAreaChart: React.FC = () => {
       a.href = url;
       a.download = `daily-data-${new Date().toISOString().split('T')[0]}.csv`;
       a.click();
-    } else {
+    } else if (viewMode === 'monthly') {
       const data = formatMonthlyData();
       if (data.length === 0) {
         setError('No data to export');
@@ -861,6 +1194,25 @@ const CombinedAreaChart: React.FC = () => {
       const a = document.createElement('a');
       a.href = url;
       a.download = `monthly-data-${new Date().toISOString().split('T')[0]}.csv`;
+      a.click();
+    } else {
+      const data = formatYearlyData();
+      if (data.length === 0) {
+        setError('No data to export');
+        return;
+      }
+      
+      const headers = ['Year', 'Energy (Wh)', 'Energy (kWh)', 'Raw Value'];
+      const csvContent = [
+        headers.join(','),
+        ...data.map(row => `${row.year},${row.value},${row.kwhValue.toFixed(2)},${row.rawValue}`)
+      ].join('\n');
+      
+      const blob = new Blob([csvContent], { type: 'text/csv' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `yearly-data-${new Date().toISOString().split('T')[0]}.csv`;
       a.click();
     }
   };
@@ -981,6 +1333,40 @@ const CombinedAreaChart: React.FC = () => {
     }
   };
 
+  // Quick presets for yearly data
+  const applyYearPreset = (preset: 'last5years' | 'last10years' | 'decade' | 'allYears') => {
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    
+    switch (preset) {
+      case 'last5years':
+        setYearRange({
+          startYear: (currentYear - 4).toString(),
+          endYear: currentYear.toString()
+        });
+        break;
+      case 'last10years':
+        setYearRange({
+          startYear: (currentYear - 9).toString(),
+          endYear: currentYear.toString()
+        });
+        break;
+      case 'decade':
+        const decadeStart = Math.floor(currentYear / 10) * 10;
+        setYearRange({
+          startYear: decadeStart.toString(),
+          endYear: (decadeStart + 9).toString()
+        });
+        break;
+      case 'allYears':
+        setYearRange({
+          startYear: '2020',
+          endYear: currentYear.toString()
+        });
+        break;
+    }
+  };
+
   // Render chart based on view mode
   const renderChart = () => {
     let data: any[] = [];
@@ -992,9 +1378,12 @@ const CombinedAreaChart: React.FC = () => {
     } else if (viewMode === 'daily') {
       data = formatDailyData();
       paramConfig = getParamConfig(dailyForm.data_point);
-    } else {
+    } else if (viewMode === 'monthly') {
       data = formatMonthlyData();
       paramConfig = getParamConfig(monthlyForm.data_point);
+    } else {
+      data = formatYearlyData();
+      paramConfig = getParamConfig(yearlyForm.data_point);
     }
     
     console.log(`Rendering ${viewMode} chart with ${data.length} data points`);
@@ -1008,7 +1397,8 @@ const CombinedAreaChart: React.FC = () => {
             <p className="text-sm text-gray-400 mt-2">
               {viewMode === 'minute' ? 'Load minute data to visualize' : 
                viewMode === 'daily' ? 'Load daily data to visualize' : 
-               'Load monthly data to visualize'}
+               viewMode === 'monthly' ? 'Load monthly data to visualize' :
+               'Load yearly data to visualize'}
             </p>
           </div>
         </div>
@@ -1030,6 +1420,12 @@ const CombinedAreaChart: React.FC = () => {
         value: item.value,
         monthIndex: parseInt(item.year) * 12 + item.monthNum
       })).sort((a: any, b: any) => a.monthIndex - b.monthIndex);
+    } else if (viewMode === 'yearly') {
+      chartData = data.map((item: YearlyDataItem) => ({
+        ...item,
+        name: item.year,
+        value: item.value
+      }));
     }
 
     const xAxisDataKey = viewMode === 'minute' ? 'time' : 'name';
@@ -1099,8 +1495,11 @@ const CombinedAreaChart: React.FC = () => {
                     } else if (viewMode === 'daily') {
                       const item = chartData.find((d: any) => d.name === label);
                       return `Date: ${item?.date || label}`;
+                    } else if (viewMode === 'monthly') {
+                      return `Month: ${label}`;
+                    } else {
+                      return `Year: ${label}`;
                     }
-                    return `Month: ${label}`;
                   }}
                 />
                 <Legend />
@@ -1116,7 +1515,7 @@ const CombinedAreaChart: React.FC = () => {
                   activeDot={{ r: 6 }}
                   isAnimationActive={chartConfig.animate}
                 />
-                {(viewMode === 'daily' || viewMode === 'monthly') && (
+                {(viewMode === 'daily' || viewMode === 'monthly' || viewMode === 'yearly') && (
                   <Brush dataKey="name" height={30} stroke={paramConfig.color} />
                 )}
               </AreaChart>
@@ -1163,8 +1562,11 @@ const CombinedAreaChart: React.FC = () => {
                     } else if (viewMode === 'daily') {
                       const item = chartData.find((d: any) => d.name === label);
                       return `Date: ${item?.date || label}`;
+                    } else if (viewMode === 'monthly') {
+                      return `Month: ${label}`;
+                    } else {
+                      return `Year: ${label}`;
                     }
-                    return `Month: ${label}`;
                   }}
                 />
                 <Legend />
@@ -1180,7 +1582,7 @@ const CombinedAreaChart: React.FC = () => {
                   activeDot={{ r: 6 }}
                   isAnimationActive={chartConfig.animate}
                 />
-                {(viewMode === 'daily' || viewMode === 'monthly') && (
+                {(viewMode === 'daily' || viewMode === 'monthly' || viewMode === 'yearly') && (
                   <Brush dataKey="name" height={30} stroke={paramConfig.color} />
                 )}
               </AreaChart>
@@ -1233,8 +1635,11 @@ const CombinedAreaChart: React.FC = () => {
                     } else if (viewMode === 'daily') {
                       const item = chartData.find((d: any) => d.name === label);
                       return `Date: ${item?.date || label}`;
+                    } else if (viewMode === 'monthly') {
+                      return `Month: ${label}`;
+                    } else {
+                      return `Year: ${label}`;
                     }
-                    return `Month: ${label}`;
                   }}
                 />
                 <Legend />
@@ -1250,7 +1655,7 @@ const CombinedAreaChart: React.FC = () => {
                   activeDot={{ r: 6 }}
                   isAnimationActive={chartConfig.animate}
                 />
-                {(viewMode === 'daily' || viewMode === 'monthly') && (
+                {(viewMode === 'daily' || viewMode === 'monthly' || viewMode === 'yearly') && (
                   <Brush dataKey="name" height={30} stroke={paramConfig.color} />
                 )}
               </AreaChart>
@@ -1271,8 +1676,10 @@ const CombinedAreaChart: React.FC = () => {
       paramConfig = getParamConfig(selectedParameter);
     } else if (viewMode === 'daily') {
       paramConfig = getParamConfig(dailyForm.data_point);
-    } else {
+    } else if (viewMode === 'monthly') {
       paramConfig = getParamConfig(monthlyForm.data_point);
+    } else {
+      paramConfig = getParamConfig(yearlyForm.data_point);
     }
 
     return (
@@ -1292,6 +1699,9 @@ const CombinedAreaChart: React.FC = () => {
           {stats.maxMonth && (
             <p className="text-xs text-gray-400 mt-1">{stats.maxMonth}</p>
           )}
+          {stats.maxYear && (
+            <p className="text-xs text-gray-400 mt-1">{stats.maxYear}</p>
+          )}
         </div>
 
         <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
@@ -1308,6 +1718,9 @@ const CombinedAreaChart: React.FC = () => {
           )}
           {stats.minMonth && (
             <p className="text-xs text-gray-400 mt-1">{stats.minMonth}</p>
+          )}
+          {stats.minYear && (
+            <p className="text-xs text-gray-400 mt-1">{stats.minYear}</p>
           )}
         </div>
 
@@ -1340,6 +1753,7 @@ const CombinedAreaChart: React.FC = () => {
       case 'minute': return fetchMinuteData;
       case 'daily': return fetchDailyData;
       case 'monthly': return fetchMonthlyData;
+      case 'yearly': return fetchYearlyData;
       default: return fetchMinuteData;
     }
   };
@@ -1350,8 +1764,99 @@ const CombinedAreaChart: React.FC = () => {
       case 'minute': return loading.minute;
       case 'daily': return loading.daily;
       case 'monthly': return loading.monthly;
+      case 'yearly': return loading.yearly;
       default: return false;
     }
+  };
+
+  // Render device details
+  const renderDeviceDetails = () => {
+    if (!deviceData) return null;
+
+    return (
+      <div className="mt-6 p-4 bg-gradient-to-r from-blue-50 to-blue-100 rounded-xl border border-blue-200">
+        <div className="flex items-center justify-between mb-4">
+          <h4 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+            <Cpu className="w-5 h-5 text-blue-600" />
+            Device Information
+          </h4>
+          <button
+            onClick={() => setShowDeviceDetails(false)}
+            className="text-gray-500 hover:text-gray-700"
+          >
+            ✕
+          </button>
+        </div>
+        
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="bg-white p-3 rounded-lg border border-gray-200">
+            <p className="text-sm text-gray-600">Device Name</p>
+            <p className="font-semibold text-gray-900">{deviceData.device_name}</p>
+          </div>
+          
+          <div className="bg-white p-3 rounded-lg border border-gray-200">
+            <p className="text-sm text-gray-600">Serial Number</p>
+            <p className="font-semibold text-gray-900">{deviceData.device_sn}</p>
+          </div>
+          
+          <div className="bg-white p-3 rounded-lg border border-gray-200">
+            <p className="text-sm text-gray-600">Communication SN</p>
+            <p className="font-semibold text-gray-900">{deviceData.communication_dev_sn}</p>
+          </div>
+          
+          <div className="bg-white p-3 rounded-lg border border-gray-200">
+            <p className="text-sm text-gray-600">Status</p>
+            <div className="flex items-center gap-2">
+              <div className={`w-2 h-2 rounded-full ${deviceData.dev_status === 1 ? 'bg-green-500' : 'bg-red-500'}`}></div>
+              <p className={`font-semibold ${deviceData.dev_status === 1 ? 'text-green-700' : 'text-red-700'}`}>
+                {deviceData.dev_status === 1 ? 'Normal' : 'Fault'}
+              </p>
+            </div>
+          </div>
+          
+          <div className="bg-white p-3 rounded-lg border border-gray-200">
+            <p className="text-sm text-gray-600">Device Time</p>
+            <p className="font-semibold text-gray-900">{deviceData.device_time}</p>
+          </div>
+          
+          <div className="bg-white p-3 rounded-lg border border-gray-200">
+            <p className="text-sm text-gray-600">PS Key</p>
+            <p className="font-semibold text-gray-900 font-mono">{deviceData.ps_key}</p>
+          </div>
+        </div>
+        
+        {/* Quick parameters */}
+        <div className="mt-4">
+          <h5 className="text-sm font-semibold text-gray-700 mb-2">Quick Parameters</h5>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+            {deviceData.p24 && (
+              <div className="bg-white p-2 rounded-lg border border-gray-200">
+                <p className="text-xs text-gray-600">Output Power</p>
+                <p className="font-semibold text-gray-900">{deviceData.p24} W</p>
+              </div>
+            )}
+            {deviceData.p2 && (
+              <div className="bg-white p-2 rounded-lg border border-gray-200">
+                <p className="text-xs text-gray-600">Total Energy</p>
+                <p className="font-semibold text-gray-900">{deviceData.p2} Wh</p>
+              </div>
+            )}
+            {deviceData.p87 && (
+              <div className="bg-white p-2 rounded-lg border border-gray-200">
+                <p className="text-xs text-gray-600">Today Energy</p>
+                <p className="font-semibold text-gray-900">{deviceData.p87} Wh</p>
+              </div>
+            )}
+            {deviceData.p25 && (
+              <div className="bg-white p-2 rounded-lg border border-gray-200">
+                <p className="text-xs text-gray-600">Temperature</p>
+                <p className="font-semibold text-gray-900">{deviceData.p25} °C</p>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
   };
 
   return (
@@ -1367,11 +1872,27 @@ const CombinedAreaChart: React.FC = () => {
                   Combined Data Analytics
                 </h1>
                 <p className="text-gray-600 mt-2">
-                  Switch between minute, daily, and monthly area graphs with datetime selection
+                  Switch between minute, daily, monthly, and yearly area graphs with datetime selection
                 </p>
               </div>
               
               <div className="flex items-center gap-3">
+                {/* Auto Login Toggle */}
+                <div className="flex items-center gap-2 bg-white px-4 py-2 rounded-lg shadow-sm border border-gray-200">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="auto-login"
+                      checked={autoLoginEnabled}
+                      onChange={(e) => setAutoLoginEnabled(e.target.checked)}
+                      className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+                    />
+                    <label htmlFor="auto-login" className="text-sm text-gray-700">
+                      Auto Login
+                    </label>
+                  </div>
+                </div>
+                
                 {token && (
                   <div className="flex items-center gap-3 bg-white px-4 py-2 rounded-lg shadow-sm border border-gray-200">
                     <CheckCircle className="w-5 h-5 text-green-500" />
@@ -1429,6 +1950,17 @@ const CombinedAreaChart: React.FC = () => {
                   <Calendar className="w-5 h-5" />
                   Monthly Data
                 </button>
+                <button
+                  onClick={() => setViewMode('yearly')}
+                  className={`px-6 py-3 rounded-md font-medium transition flex items-center gap-2 ${
+                    viewMode === 'yearly'
+                      ? 'bg-blue-600 text-white shadow-sm'
+                      : 'text-gray-700 hover:text-gray-900'
+                  }`}
+                >
+                  <CalendarDays className="w-5 h-5" />
+                  Yearly Data
+                </button>
               </div>
             </div>
 
@@ -1459,12 +1991,20 @@ const CombinedAreaChart: React.FC = () => {
                       {dailyDateRange.startDate} - {dailyDateRange.endDate}
                     </span>
                   </>
-                ) : (
+                ) : viewMode === 'monthly' ? (
                   <>
                     <Calendar className="w-4 h-4 text-blue-500" />
                     <span className="text-sm font-medium text-gray-700">Month Range</span>
                     <span className="text-sm text-gray-900">
                       {monthNames[parseInt(monthRange.startMonth) - 1]} {monthRange.startYear} - {monthNames[parseInt(monthRange.endMonth) - 1]} {monthRange.endYear}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <CalendarDays className="w-4 h-4 text-blue-500" />
+                    <span className="text-sm font-medium text-gray-700">Year Range</span>
+                    <span className="text-sm text-gray-900">
+                      {yearRange.startYear} - {yearRange.endYear}
                     </span>
                   </>
                 )}
@@ -1478,42 +2018,132 @@ const CombinedAreaChart: React.FC = () => {
                     ? getParamConfig(selectedParameter).label
                     : viewMode === 'daily'
                     ? getParamConfig(dailyForm.data_point).label
-                    : getParamConfig(monthlyForm.data_point).label}
+                    : viewMode === 'monthly'
+                    ? getParamConfig(monthlyForm.data_point).label
+                    : getParamConfig(yearlyForm.data_point).label}
                 </span>
               </div>
+
+              {/* Serial Number Display */}
+              {deviceData && (
+                <div className="flex items-center gap-2 px-4 py-2 bg-white rounded-lg border border-gray-200 shadow-sm">
+                  <Cpu className="w-4 h-4 text-green-500" />
+                  <span className="text-sm font-medium text-gray-700">SN</span>
+                  <span className="text-sm text-gray-900 font-mono">
+                    {deviceData.device_sn}
+                  </span>
+                </div>
+              )}
             </div>
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
             {/* Left Panel - Controls */}
             <div className="lg:col-span-1 space-y-6">
+              {/* Device Configuration Card */}
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+                <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                  <Server className="w-5 h-5 text-gray-600" />
+                  Device Configuration
+                </h3>
+                
+                <div className="space-y-4">
+                  {/* Serial Number Input */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      <div className="flex items-center gap-2">
+                        <HardDrive className="w-4 h-4" />
+                        Serial Number
+                      </div>
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={serialNumber}
+                        onChange={(e) => setSerialNumber(e.target.value)}
+                        className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition"
+                        placeholder="Enter device serial number"
+                      />
+                      <button
+                        onClick={() => fetchDeviceDataBySerial()}
+                        disabled={loading.device || !token}
+                        className={`px-4 py-2 rounded-lg font-medium transition flex items-center gap-2 ${
+                          loading.device || !token
+                            ? 'bg-gray-300 cursor-not-allowed text-gray-500'
+                            : 'bg-blue-600 hover:bg-blue-700 text-white'
+                        }`}
+                      >
+                        {loading.device ? (
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                        ) : (
+                          <Search className="w-4 h-4" />
+                        )}
+                        Fetch
+                      </button>
+                    </div>
+                    <p className="text-xs text-gray-500 mt-1">
+                      Enter inverter serial number to fetch PS Key automatically
+                    </p>
+                  </div>
+
+                  {/* PS Key Input */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      <div className="flex items-center gap-2">
+                        <Key className="w-4 h-4" />
+                        PS Key
+                      </div>
+                    </label>
+                    <input
+                      type="text"
+                      value={minuteForm.ps_key_list}
+                      onChange={(e) => setMinuteForm(prev => ({ ...prev, ps_key_list: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition"
+                      placeholder="Enter PS Key"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Current: {psKey || 'Not set'}
+                    </p>
+                    <p className="text-xs text-gray-500 mt-1">
+                      Auto-updated from serial number fetch
+                    </p>
+                  </div>
+
+                  {/* Device Quick Actions */}
+                  {deviceData && (
+                    <div className="pt-4 border-t border-gray-200">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm font-medium text-gray-700">Device Status</span>
+                        <div className="flex items-center gap-2">
+                          <div className={`w-2 h-2 rounded-full ${deviceData.dev_status === 1 ? 'bg-green-500' : 'bg-red-500'}`}></div>
+                          <span className={`text-xs font-medium ${deviceData.dev_status === 1 ? 'text-green-700' : 'text-red-700'}`}>
+                            {deviceData.dev_status === 1 ? 'Normal' : 'Fault'}
+                          </span>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => setShowDeviceDetails(!showDeviceDetails)}
+                        className="w-full mt-2 px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition flex items-center justify-center gap-2"
+                      >
+                        {showDeviceDetails ? 'Hide' : 'Show'} Device Details
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+
               {/* Configuration Card */}
               <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
                 <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
                   <Settings className="w-5 h-5 text-gray-600" />
                   {viewMode === 'minute' ? 'Minute Data Config' : 
                    viewMode === 'daily' ? 'Daily Data Config' : 
-                   'Monthly Data Config'}
+                   viewMode === 'monthly' ? 'Monthly Data Config' :
+                   'Yearly Data Config'}
                 </h3>
                 
                 {viewMode === 'minute' ? (
                   <div className="space-y-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        PS Key
-                      </label>
-                      <input
-                        type="text"
-                        value={minuteForm.ps_key_list}
-                        onChange={(e) => setMinuteForm(prev => ({ ...prev, ps_key_list: e.target.value }))}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition"
-                        placeholder="Enter PS Key"
-                      />
-                      <p className="text-xs text-gray-500 mt-1">
-                        From context: {psKey || 'Not shared yet'}
-                      </p>
-                    </div>
-
                     <div className="grid grid-cols-2 gap-4">
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -1637,22 +2267,6 @@ const CombinedAreaChart: React.FC = () => {
                   </div>
                 ) : viewMode === 'daily' ? (
                   <div className="space-y-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        PS Key
-                      </label>
-                      <input
-                        type="text"
-                        value={dailyForm.ps_key}
-                        onChange={(e) => setDailyForm(prev => ({ ...prev, ps_key: e.target.value }))}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition"
-                        placeholder="Enter PS Key"
-                      />
-                      <p className="text-xs text-gray-500 mt-1">
-                        From context: {psKey || 'Not shared yet'}
-                      </p>
-                    </div>
-
                     <div className="grid grid-cols-2 gap-4">
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -1748,24 +2362,8 @@ const CombinedAreaChart: React.FC = () => {
                       </div>
                     </div>
                   </div>
-                ) : (
+                ) : viewMode === 'monthly' ? (
                   <div className="space-y-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        PS Key
-                      </label>
-                      <input
-                        type="text"
-                        value={monthlyForm.ps_key}
-                        onChange={(e) => setMonthlyForm(prev => ({ ...prev, ps_key: e.target.value }))}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition"
-                        placeholder="Enter PS Key"
-                      />
-                      <p className="text-xs text-gray-500 mt-1">
-                        From context: {psKey || 'Not shared yet'}
-                      </p>
-                    </div>
-
                     <div className="grid grid-cols-2 gap-4">
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -1893,6 +2491,118 @@ const CombinedAreaChart: React.FC = () => {
                       </div>
                     </div>
                   </div>
+                ) : (
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Start Year
+                        </label>
+                        <select
+                          value={yearRange.startYear}
+                          onChange={(e) => setYearRange(prev => ({ ...prev, startYear: e.target.value }))}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition"
+                        >
+                          {Array.from({ length: 15 }, (_, i) => {
+                            const year = new Date().getFullYear() - 10 + i;
+                            return (
+                              <option key={year} value={year.toString()}>
+                                {year}
+                              </option>
+                            );
+                          })}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          End Year
+                        </label>
+                        <select
+                          value={yearRange.endYear}
+                          onChange={(e) => setYearRange(prev => ({ ...prev, endYear: e.target.value }))}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition"
+                        >
+                          {Array.from({ length: 15 }, (_, i) => {
+                            const year = new Date().getFullYear() - 10 + i;
+                            return (
+                              <option key={year} value={year.toString()}>
+                                {year}
+                              </option>
+                            );
+                          })}
+                        </select>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Data Point
+                      </label>
+                      <select
+                        value={yearlyForm.data_point}
+                        onChange={(e) => setYearlyForm(prev => ({ ...prev, data_point: e.target.value }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition"
+                      >
+                        <option value="p2">Total Energy (p2)</option>
+                        <option value="p1">Total Power (p1)</option>
+                        <option value="p24">Output Power (p24)</option>
+                        <option value="p18">Grid Voltage (p18)</option>
+                        <option value="p21">Output Current (p21)</option>
+                        <option value="p25">Temperature (p25)</option>
+                        <option value="p87">Today Energy (p87)</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Data Type
+                      </label>
+                      <select
+                        value={yearlyForm.data_type}
+                        onChange={(e) => setYearlyForm(prev => ({ ...prev, data_type: e.target.value }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition"
+                      >
+                        <option value="2">Peak Values</option>
+                        <option value="4">Total Values</option>
+                      </select>
+                      <p className="text-xs text-gray-500 mt-1">
+                        {yearlyForm.data_type === '2' ? 'Returns yearly peak values' : 'Returns yearly total values'}
+                      </p>
+                    </div>
+
+                    {/* Quick Presets */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Quick Presets
+                      </label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          onClick={() => applyYearPreset('last5years')}
+                          className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition"
+                        >
+                          Last 5 Years
+                        </button>
+                        <button
+                          onClick={() => applyYearPreset('last10years')}
+                          className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition"
+                        >
+                          Last 10 Years
+                        </button>
+                        <button
+                          onClick={() => applyYearPreset('decade')}
+                          className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition"
+                        >
+                          Current Decade
+                        </button>
+                        <button
+                          onClick={() => applyYearPreset('allYears')}
+                          className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition"
+                        >
+                          All Years
+                        </button>
+                      </div>
+                    </div>
+                  </div>
                 )}
 
                 {/* Fetch Button */}
@@ -1910,16 +2620,19 @@ const CombinedAreaChart: React.FC = () => {
                       <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
                       {viewMode === 'minute' ? 'Loading Minute Data...' : 
                        viewMode === 'daily' ? 'Loading Daily Data...' : 
-                       'Loading Monthly Data...'}
+                       viewMode === 'monthly' ? 'Loading Monthly Data...' :
+                       'Loading Yearly Data...'}
                     </>
                   ) : (
                     <>
                       {viewMode === 'minute' ? <Clock className="w-5 h-5" /> :
                        viewMode === 'daily' ? <Sun className="w-5 h-5" /> :
-                       <Calendar className="w-5 h-5" />}
+                       viewMode === 'monthly' ? <Calendar className="w-5 h-5" /> :
+                       <CalendarDays className="w-5 h-5" />}
                       {viewMode === 'minute' ? 'Fetch Minute Data' : 
                        viewMode === 'daily' ? 'Fetch Daily Data' : 
-                       'Fetch Monthly Data'}
+                       viewMode === 'monthly' ? 'Fetch Monthly Data' :
+                       'Fetch Yearly Data'}
                     </>
                   )}
                 </button>
@@ -1940,7 +2653,8 @@ const CombinedAreaChart: React.FC = () => {
                   <p className="text-xs text-gray-600">
                     {viewMode === 'minute' ? `Data Points: ${minuteData ? formatMinuteData().length : 0}` :
                      viewMode === 'daily' ? `Data Points: ${dailyData ? formatDailyData().length : 0}` :
-                     `Data Points: ${monthlyData ? formatMonthlyData().length : 0}`}
+                     viewMode === 'monthly' ? `Data Points: ${monthlyData ? formatMonthlyData().length : 0}` :
+                     `Data Points: ${yearlyData ? formatYearlyData().length : 0}`}
                   </p>
                   {viewMode === 'minute' && (
                     <>
@@ -2097,10 +2811,15 @@ const CombinedAreaChart: React.FC = () => {
                           <Sun className="w-6 h-6 text-blue-600" />
                           Daily Data Area Graph
                         </>
-                      ) : (
+                      ) : viewMode === 'monthly' ? (
                         <>
                           <Calendar className="w-6 h-6 text-blue-600" />
                           Monthly Data Area Graph
+                        </>
+                      ) : (
+                        <>
+                          <CalendarDays className="w-6 h-6 text-blue-600" />
+                          Yearly Data Area Graph
                         </>
                       )}
                     </h2>
@@ -2109,7 +2828,9 @@ const CombinedAreaChart: React.FC = () => {
                         ? `Showing ${minuteData ? formatMinuteData().length : 0} minute intervals` 
                         : viewMode === 'daily'
                         ? `Showing ${dailyData ? formatDailyData().length : 0} days of data`
-                        : `Showing ${monthlyData ? formatMonthlyData().length : 0} months of data`}
+                        : viewMode === 'monthly'
+                        ? `Showing ${monthlyData ? formatMonthlyData().length : 0} months of data`
+                        : `Showing ${yearlyData ? formatYearlyData().length : 0} years of data`}
                     </p>
                   </div>
                   
@@ -2135,7 +2856,8 @@ const CombinedAreaChart: React.FC = () => {
                       onClick={exportData}
                       disabled={(viewMode === 'minute' && !minuteData) || 
                                (viewMode === 'daily' && !dailyData) || 
-                               (viewMode === 'monthly' && !monthlyData)}
+                               (viewMode === 'monthly' && !monthlyData) ||
+                               (viewMode === 'yearly' && !yearlyData)}
                       className="px-4 py-2 text-sm bg-green-600 hover:bg-green-700 text-white rounded-lg transition flex items-center gap-2"
                     >
                       <Download className="w-4 h-4" />
@@ -2150,18 +2872,23 @@ const CombinedAreaChart: React.FC = () => {
                 {renderChart()}
               </div>
 
+              {/* Device Details */}
+              {showDeviceDetails && renderDeviceDetails()}
+
               {/* Statistics */}
               {renderStats()}
 
               {/* Data Table */}
               {((viewMode === 'minute' && minuteData) || 
                 (viewMode === 'daily' && dailyData) || 
-                (viewMode === 'monthly' && monthlyData)) && (
+                (viewMode === 'monthly' && monthlyData) ||
+                (viewMode === 'yearly' && yearlyData)) && (
                 <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
                   <h3 className="text-lg font-semibold text-gray-900 mb-4">
                     {viewMode === 'minute' ? 'Minute Data Table' : 
                      viewMode === 'daily' ? 'Daily Data Table' : 
-                     'Monthly Data Table'}
+                     viewMode === 'monthly' ? 'Monthly Data Table' :
+                     'Yearly Data Table'}
                   </h3>
                   
                   <div className="overflow-x-auto max-h-96 overflow-y-auto">
@@ -2184,9 +2911,16 @@ const CombinedAreaChart: React.FC = () => {
                               <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50">Value</th>
                               <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50">Raw Value</th>
                             </>
-                          ) : (
+                          ) : viewMode === 'monthly' ? (
                             <>
                               <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50">Month</th>
+                              <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50">Energy (Wh)</th>
+                              <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50">Energy (kWh)</th>
+                              <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50">Raw Value</th>
+                            </>
+                          ) : (
+                            <>
+                              <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50">Year</th>
                               <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50">Energy (Wh)</th>
                               <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50">Energy (kWh)</th>
                               <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50">Raw Value</th>
@@ -2224,10 +2958,19 @@ const CombinedAreaChart: React.FC = () => {
                               <td className="py-3 px-4 font-mono text-sm">{row.rawValue}</td>
                             </tr>
                           ))
-                        ) : (
+                        ) : viewMode === 'monthly' ? (
                           formatMonthlyData().map((row, index) => (
                             <tr key={index} className="border-b border-gray-100 hover:bg-gray-50">
                               <td className="py-3 px-4">{row.monthName} {row.year}</td>
+                              <td className="py-3 px-4">{row.formattedValue}</td>
+                              <td className="py-3 px-4">{row.kwhValue.toFixed(2)}</td>
+                              <td className="py-3 px-4 font-mono text-sm">{row.rawValue}</td>
+                            </tr>
+                          ))
+                        ) : (
+                          formatYearlyData().map((row, index) => (
+                            <tr key={index} className="border-b border-gray-100 hover:bg-gray-50">
+                              <td className="py-3 px-4">{row.year}</td>
                               <td className="py-3 px-4">{row.formattedValue}</td>
                               <td className="py-3 px-4">{row.kwhValue.toFixed(2)}</td>
                               <td className="py-3 px-4 font-mono text-sm">{row.rawValue}</td>
@@ -2244,13 +2987,15 @@ const CombinedAreaChart: React.FC = () => {
 
           {/* Footer */}
           <div className="mt-8 pt-6 border-t border-gray-200 text-center text-sm text-gray-500">
-            <p>Combined Data Analytics • Switch between minute, daily, and monthly area graphs • Powered by RBP India Solar Solutions</p>
+            <p>Combined Data Analytics • Switch between minute, daily, monthly, and yearly area graphs • Powered by RBP India Solar Solutions</p>
             <p className="mt-1">
               {viewMode === 'minute' 
                 ? `Displaying ${minuteData ? formatMinuteData().length : 0} minute data points` 
                 : viewMode === 'daily'
                 ? `Displaying ${dailyData ? formatDailyData().length : 0} daily data points`
-                : `Displaying ${monthlyData ? formatMonthlyData().length : 0} monthly data points`}
+                : viewMode === 'monthly'
+                ? `Displaying ${monthlyData ? formatMonthlyData().length : 0} monthly data points`
+                : `Displaying ${yearlyData ? formatYearlyData().length : 0} yearly data points`}
               • Updated: {new Date().toLocaleString()}
             </p>
           </div>

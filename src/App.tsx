@@ -1,27 +1,22 @@
 import React from 'react';
-import LoginDisplay from './components/LoginDisplay';
 import DeviceData from './components/DeviceData';
-import HistoricalDataChart from './components/HistoricalDataChart';
-import MinuteDataChart from './components/MinutedataChart';
-import SimpleMonthData from './components/MonthlyenergyAnalytics';
-import YearlyEnergyData from './components/YearlyEnergyData';
 import CombinedAreaChart from './components/CombinedAreaChart';
+import MonthlyEnergyAnalytics from './components/MonthlyenergyAnalytics';
+import CumulativeEnergyDisplay from './components/CumulativeEnergyDisplay';
+import HistoricalDataChart from './components/HistoricalDataChart';
 import { DeviceProvider } from './context/DeviceContext';
 
 const App: React.FC = () => {
   return (
-   <DeviceProvider>
-     <div>
-      <h1>Solar Cloud API Integration</h1>
-      <LoginDisplay />
-      <DeviceData />
-      <HistoricalDataChart />
-      <MinuteDataChart />
-      <SimpleMonthData />
-      <YearlyEnergyData />
-      <CombinedAreaChart />
-    </div>
-   </DeviceProvider>
+    <DeviceProvider>
+      <div className='w-dvw p-5'>
+        <DeviceData />
+        <MonthlyEnergyAnalytics />
+        <CumulativeEnergyDisplay />
+        <CombinedAreaChart />
+        <HistoricalDataChart />
+      </div>
+    </DeviceProvider>
   );
 };
 
