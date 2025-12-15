@@ -1,5 +1,5 @@
-// components/HistoricalDataChart.tsx - Updated with professional UI and date picker and subtraction logic
-import React, { useState, useEffect } from 'react';
+// components/HistoricalDataChart.tsx - Updated with professional cumulative conversion logic
+import React, { useState, useEffect, useMemo } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, BarChart, Bar, Legend, ReferenceLine } from 'recharts';
 import { useDeviceContext } from '../context/DeviceContext';
 import { 
@@ -17,7 +17,9 @@ import {
   RefreshCw, 
   CheckCircle, 
   AlertCircle,
-  ChevronRight  // Added this import
+  ChevronRight,
+  Calculator,
+  Info
 } from 'lucide-react';
 
 interface HistoricalDataPoint {
@@ -47,16 +49,26 @@ interface LoginResponse {
   } | null;
 }
 
-interface ChartDataItem {
-  date: string;
-  value: number; // Difference value (current - previous)
-  cumulativeValue?: number; // Original cumulative value
-  rawValue: string;
+interface CumulativeDataItem {
   timestamp: string;
-  formattedValue: string;
+  date: string;
+  originalWh: number; // API value in Wh
+  cumulativeKwh: number; // Converted to kWh
+  cumulativeWh: number; // Original in Wh (for reference)
   period: string;
-  growth?: string;
-  kwhValue?: number;
+  isFirstPeriod: boolean; // Flag to identify first period
+}
+
+interface PeriodDataItem {
+  timestamp: string;
+  date: string;
+  periodProductionKwh: number; // Production for this period
+  cumulativeKwh: number; // Cumulative to date
+  originalWh: number; // Original API value in Wh
+  period: string;
+  growth?: number; // Growth percentage
+  calculation: string; // Formula used
+  isFirstPeriod: boolean;
 }
 
 const HistoricalDataChart: React.FC = () => {
@@ -90,6 +102,7 @@ const HistoricalDataChart: React.FC = () => {
   const [chartType, setChartType] = useState<'area' | 'line' | 'bar'>('area');
   const [showRawJson, setShowRawJson] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [conversionMode, setConversionMode] = useState<'cumulative' | 'period'>('period');
 
   // Update formData when psKey changes
   useEffect(() => {
@@ -317,8 +330,8 @@ const HistoricalDataChart: React.FC = () => {
     }
   };
 
-  // Format data for chart with subtraction logic
-  const formatChartData = (): ChartDataItem[] => {
+  // Format cumulative data from API - PROFESSIONAL FIXED VERSION
+  const formatCumulativeData = (): CumulativeDataItem[] => {
     if (!historicalData) return [];
     
     const psKey = Object.keys(historicalData.result_data)[0];
@@ -327,73 +340,158 @@ const HistoricalDataChart: React.FC = () => {
     const dataPoint = Object.keys(historicalData.result_data[psKey])[0];
     const dataArray = historicalData.result_data[psKey][dataPoint];
     
-    // Sort data by timestamp to ensure chronological order
-    const sortedData = [...dataArray].sort((a, b) => {
-      const aDate = a.time_stamp;
-      const bDate = b.time_stamp;
-      if (aDate < bDate) return -1;
-      if (aDate > bDate) return 1;
-      return 0;
-    });
-    
-    return sortedData.map((item, index) => {
-      const formattedDate = formatDateFromAPI(item.time_stamp, formData.query_type);
-      const valueKey = Object.keys(item).find(key => key !== 'time_stamp');
-      const cumulativeValue = valueKey ? parseFloat(item[valueKey]) : 0;
-      
-      // Calculate difference: current cumulative - previous cumulative
-      let differenceValue = cumulativeValue;
-      let growth = '0';
-      
-      if (index > 0) {
-        const prevItem = sortedData[index - 1];
-        const prevValueKey = Object.keys(prevItem).find(key => key !== 'time_stamp');
-        const prevCumulativeValue = prevValueKey ? parseFloat(prevItem[prevValueKey]) : 0;
-        differenceValue = cumulativeValue - prevCumulativeValue;
-        
-        // Calculate growth percentage
-        if (prevCumulativeValue > 0) {
-          const growthValue = ((cumulativeValue - prevCumulativeValue) / prevCumulativeValue) * 100;
-          growth = growthValue.toFixed(1);
-        }
-      }
-      
-      // Format period label based on query type
-      let period = '';
+    if (!dataArray || dataArray.length === 0) return [];
+
+    // Sort data by timestamp chronologically
+    const sortedData = [...dataArray].sort((a, b) => a.time_stamp.localeCompare(b.time_stamp));
+
+    // Get period label based on query type
+    const getPeriodLabel = () => {
       switch (formData.query_type) {
-        case '1': period = 'Day'; break;
-        case '2': period = 'Month'; break;
-        case '3': period = 'Year'; break;
-        default: period = 'Period';
+        case '1': return 'Daily';
+        case '2': return 'Monthly';
+        case '3': return 'Yearly';
+        default: return 'Period';
       }
+    };
+
+    return sortedData.map((item, index) => {
+      const timestamp = item.time_stamp;
+      const formattedDate = formatDateFromAPI(timestamp, formData.query_type);
+      const valueKey = Object.keys(item).find(key => key !== 'time_stamp');
       
+      if (!valueKey) {
+        return {
+          timestamp,
+          date: formattedDate,
+          originalWh: 0,
+          cumulativeKwh: 0,
+          cumulativeWh: 0,
+          period: getPeriodLabel(),
+          isFirstPeriod: index === 0
+        };
+      }
+
+      const originalWh = parseFloat(item[valueKey]) || 0;
+      const cumulativeKwh = Number((originalWh / 1000).toFixed(2)); // Convert Wh to kWh and round to 2 decimals
+
       return {
+        timestamp,
         date: formattedDate,
-        value: differenceValue,
-        cumulativeValue: cumulativeValue,
-        rawValue: item[valueKey || ''],
-        timestamp: item.time_stamp,
-        formattedValue: differenceValue.toLocaleString(undefined, {
-          minimumFractionDigits: 2,
-          maximumFractionDigits: 2
-        }),
-        period: period,
-        growth: growth,
-        kwhValue: differenceValue / 1000
+        originalWh,
+        cumulativeKwh,
+        cumulativeWh: originalWh,
+        period: getPeriodLabel(),
+        isFirstPeriod: index === 0
       };
     });
+  };
+
+  // Professional conversion: Cumulative to Period Production - FIXED VERSION
+  const convertCumulativeToPeriodProduction = (
+    cumulativeData: CumulativeDataItem[]
+  ): PeriodDataItem[] => {
+    if (!Array.isArray(cumulativeData) || cumulativeData.length === 0) {
+      return [];
+    }
+
+    // Sort chronologically for correct calculations
+    const sortedData = [...cumulativeData].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+
+    return sortedData.map((current, index) => {
+      if (index === 0) {
+        // First period: production equals cumulative
+        return {
+          timestamp: current.timestamp,
+          date: current.date,
+          periodProductionKwh: Number(current.cumulativeKwh.toFixed(2)),
+          cumulativeKwh: current.cumulativeKwh,
+          originalWh: current.originalWh,
+          period: current.period,
+          calculation: 'First period: Production = Cumulative',
+          isFirstPeriod: true
+        };
+      }
+
+      const previous = sortedData[index - 1];
+      const periodKwh = current.cumulativeKwh - previous.cumulativeKwh;
+      
+      // Prevent negative values (data safeguard) but log them
+      const safePeriodKwh = Math.max(0, periodKwh);
+      
+      if (periodKwh < 0) {
+        console.warn(`Negative period value detected: ${current.date} (${periodKwh.toFixed(2)} kWh). Using 0 instead.`);
+      }
+      
+      // Calculate growth percentage
+      const growth = previous.cumulativeKwh > 0 
+        ? Number(((current.cumulativeKwh - previous.cumulativeKwh) / previous.cumulativeKwh * 100).toFixed(1))
+        : 0;
+
+      return {
+        timestamp: current.timestamp,
+        date: current.date,
+        periodProductionKwh: Number(safePeriodKwh.toFixed(2)),
+        cumulativeKwh: current.cumulativeKwh,
+        originalWh: current.originalWh,
+        period: current.period,
+        growth,
+        calculation: `${current.cumulativeKwh.toFixed(2)} kWh - ${previous.cumulativeKwh.toFixed(2)} kWh = ${safePeriodKwh.toFixed(2)} kWh`,
+        isFirstPeriod: false
+      };
+    });
+  };
+
+  // Use useMemo for efficient data calculation
+  const periodData = useMemo(() => {
+    const cumulativeData = formatCumulativeData();
+    console.log('Cumulative Data for Conversion:', cumulativeData); // Debug log
+    const result = convertCumulativeToPeriodProduction(cumulativeData);
+    console.log('Period Data Result:', result); // Debug log
+    return result;
+  }, [historicalData, formData.query_type]);
+
+  // Format data for chart based on conversion mode - FIXED VERSION
+  const formatChartData = () => {
+    if (conversionMode === 'cumulative') {
+      const cumulativeData = formatCumulativeData();
+      console.log('Chart Cumulative Data:', cumulativeData); // Debug log
+      
+      return cumulativeData.map(item => ({
+        ...item,
+        name: item.date,
+        value: item.cumulativeKwh,
+        displayValue: item.cumulativeKwh.toFixed(2),
+        unit: 'kWh',
+        label: `Cumulative (${item.period})`,
+        originalValue: item.originalWh,
+        isFirstPeriod: item.isFirstPeriod
+      }));
+    } else {
+      console.log('Chart Period Data:', periodData); // Debug log
+      return periodData.map(item => ({
+        ...item,
+        name: item.date,
+        value: item.periodProductionKwh,
+        displayValue: item.periodProductionKwh.toFixed(2),
+        unit: 'kWh',
+        label: `${item.period} Production`,
+        cumulativeValue: item.cumulativeKwh,
+        isFirstPeriod: item.isFirstPeriod
+      }));
+    }
   };
 
   // Get data point label and config
   const getDataPointConfig = (point: string) => {
     const configs = {
       p1: { label: 'Total Power', unit: 'W', icon: Zap, color: '#3B82F6' },
-      p2: { label: 'Total Energy', unit: 'Wh', icon: Battery, color: '#10B981' },
+      p2: { label: 'Total Energy', unit: 'Wh/kWh', icon: Battery, color: '#10B981' },
       p14: { label: 'Grid Voltage', unit: 'V', icon: Gauge, color: '#8B5CF6' },
       p21: { label: 'Output Current', unit: 'A', icon: Activity, color: '#F59E0B' },
       p24: { label: 'Output Power', unit: 'W', icon: Zap, color: '#EF4444' },
       p25: { label: 'Temperature', unit: '°C', icon: Thermometer, color: '#EC4899' },
-      p87: { label: 'Today Energy', unit: 'Wh', icon: Battery, color: '#06B6D4' }
+      p87: { label: 'Today Energy', unit: 'Wh/kWh', icon: Battery, color: '#06B6D4' }
     };
     return configs[point as keyof typeof configs] || { label: point, unit: '', icon: Activity, color: '#6B7280' };
   };
@@ -408,17 +506,7 @@ const HistoricalDataChart: React.FC = () => {
     return types[formData.query_type] || 'Unknown';
   };
 
-  // Calculate date range limits
-  const getDateRangeLimits = () => {
-    switch (formData.query_type) {
-      case '1': return 'Max 100 days';
-      case '2': return 'Max 24 months';
-      case '3': return 'Max 5 years';
-      default: return '';
-    }
-  };
-
-  // Calculate statistics
+  // Calculate statistics - FIXED VERSION
   const calculateStats = () => {
     const data = formatChartData();
     if (data.length === 0) return null;
@@ -431,90 +519,131 @@ const HistoricalDataChart: React.FC = () => {
     const maxItem = data.find(d => d.value === max);
     const minItem = data.find(d => d.value === min);
     
-    // Calculate growth based on difference values
-    const growth = data.length > 1 
-      ? ((data[data.length - 1].value - data[data.length - 2].value) / data[data.length - 2].value * 100)
-      : 0;
-    
-    // Calculate trend line
-    let trendSlope = 0;
-    if (data.length > 1) {
-      const xValues = data.map((_, i) => i);
-      const yValues = data.map(d => d.value);
-      const n = xValues.length;
-      
-      const sumX = xValues.reduce((a, b) => a + b, 0);
-      const sumY = yValues.reduce((a, b) => a + b, 0);
-      const sumXY = xValues.reduce((sum, x, i) => sum + x * yValues[i], 0);
-      const sumXX = xValues.reduce((sum, x) => sum + x * x, 0);
-      
-      trendSlope = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX);
+    let totalGrowth = 0;
+    if (conversionMode === 'cumulative') {
+      const cumulativeData = formatCumulativeData();
+      if (cumulativeData.length >= 2) {
+        const firstValue = cumulativeData[0].cumulativeKwh;
+        const lastValue = cumulativeData[cumulativeData.length - 1].cumulativeKwh;
+        totalGrowth = firstValue > 0 ? ((lastValue - firstValue) / firstValue * 100) : 0;
+      }
+    } else {
+      const periodValues = periodData.map(d => d.periodProductionKwh);
+      if (periodValues.length >= 2) {
+        const firstPeriodValue = periodValues[0];
+        const lastPeriodValue = periodValues[periodValues.length - 1];
+        totalGrowth = firstPeriodValue > 0 ? ((lastPeriodValue - firstPeriodValue) / firstPeriodValue * 100) : 0;
+      }
     }
     
     return { 
-      sum, 
-      avg, 
-      max, 
-      min, 
+      sum: Number(sum.toFixed(2)), 
+      avg: Number(avg.toFixed(2)), 
+      max: Number(max.toFixed(2)), 
+      min: Number(min.toFixed(2)), 
       maxPeriod: maxItem ? `${maxItem.date}` : '',
       minPeriod: minItem ? `${minItem.date}` : '',
       count: values.length,
-      growth: growth.toFixed(1),
-      trendSlope: (trendSlope * 100).toFixed(2),
-      totalCumulative: data[data.length - 1]?.cumulativeValue || 0
+      growth: totalGrowth.toFixed(1),
+      totalGrowth,
+      firstValue: values[0] || 0,
+      lastValue: values[values.length - 1] || 0
     };
   };
 
   // Export data as CSV
   const exportToCSV = () => {
-    const data = formatChartData();
-    const config = getDataPointConfig(formData.data_point);
     const periodType = getQueryTypeDescription();
+    const isCumulativeMode = conversionMode === 'cumulative';
     
-    const headers = ['Date', `${periodType} Production (${config.unit})`, `${periodType} Production (kWh)`, 'Cumulative Value', 'Growth %', 'Raw Value'];
+    const headers = isCumulativeMode 
+      ? ['Date', 'Cumulative (Wh)', 'Cumulative (kWh)', 'Period Type', 'Is First Period']
+      : ['Date', 'Period Production (kWh)', 'Cumulative (kWh)', 'Growth %', 'Calculation', 'Original (Wh)', 'Is First Period'];
+    
     const csvContent = [
       headers.join(','),
-      ...data.map(row => `${row.date},${row.value},${row.kwhValue?.toFixed(2) || '0'},${row.cumulativeValue},${row.growth}%,${row.rawValue}`)
+      ...(isCumulativeMode 
+        ? formatCumulativeData().map(row => 
+            `${row.date},${row.originalWh},${row.cumulativeKwh.toFixed(2)},${row.period},${row.isFirstPeriod ? 'Yes' : 'No'}`
+          )
+        : periodData.map(row => 
+            `${row.date},${row.periodProductionKwh.toFixed(2)},${row.cumulativeKwh.toFixed(2)},${row.growth || 0},${row.calculation},${row.originalWh},${row.isFirstPeriod ? 'Yes' : 'No'}`
+          )
+      )
     ].join('\n');
     
     const blob = new Blob([csvContent], { type: 'text/csv' });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${periodType.toLowerCase()}-energy-data-${new Date().toISOString().split('T')[0]}.csv`;
+    a.download = `${periodType.toLowerCase()}-${conversionMode}-data-${new Date().toISOString().split('T')[0]}.csv`;
     a.click();
+    window.URL.revokeObjectURL(url);
   };
 
-  // Custom Tooltip component
+  // Custom Tooltip component - IMPROVED VERSION
   const CustomTooltip = ({ active, payload, label }: any) => {
     if (active && payload && payload.length) {
       const data = payload[0].payload;
-      const config = getDataPointConfig(formData.data_point);
-      const periodType = getQueryTypeDescription();
+      const isCumulative = conversionMode === 'cumulative';
       
       return (
         <div className="bg-white p-4 rounded-lg shadow-lg border border-gray-200">
           <p className="font-semibold text-gray-900 mb-2">{data.date}</p>
-          <div className="space-y-1">
-            <p className="text-sm">
-              <span className="text-gray-600">{periodType} Production: </span>
-              <span className="font-semibold text-gray-900">{data.value.toLocaleString()} {config.unit}</span>
-            </p>
-            <p className="text-sm">
-              <span className="text-gray-600">Cumulative Total: </span>
-              <span className="font-semibold text-blue-600">{data.cumulativeValue?.toLocaleString()} {config.unit}</span>
-            </p>
-            <p className="text-sm">
-              <span className="text-gray-600">In kWh: </span>
-              <span className="font-semibold text-green-600">{data.kwhValue?.toFixed(2)} kWh</span>
-            </p>
-            {data.growth && parseFloat(data.growth) !== 0 && (
-              <p className="text-sm">
-                <span className="text-gray-600">Growth: </span>
-                <span className={`font-semibold ${parseFloat(data.growth) > 0 ? 'text-green-600' : 'text-red-600'}`}>
-                  {parseFloat(data.growth) > 0 ? '↑' : '↓'} {Math.abs(parseFloat(data.growth))}%
-                </span>
-              </p>
+          <div className="space-y-2">
+            {isCumulative ? (
+              <>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-gray-600">Cumulative Energy:</span>
+                  <span className="font-semibold text-blue-600 ml-2">
+                    {data.cumulativeKwh?.toFixed(2) || data.value?.toFixed(2)} kWh
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-gray-600">Original Wh:</span>
+                  <span className="font-semibold text-gray-900">
+                    {data.originalValue?.toLocaleString() || (data.value * 1000).toLocaleString()} Wh
+                  </span>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-gray-600">{getQueryTypeDescription()} Production:</span>
+                  <span className="font-semibold text-green-600 ml-2">
+                    {data.periodProductionKwh?.toFixed(2) || data.value?.toFixed(2)} kWh
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-gray-600">Cumulative to Date:</span>
+                  <span className="font-semibold text-blue-600">
+                    {data.cumulativeValue?.toFixed(2) || data.cumulativeKwh?.toFixed(2)} kWh
+                  </span>
+                </div>
+                {data.growth !== undefined && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-gray-600">Growth:</span>
+                    <span className={`font-semibold ${data.growth > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      {data.growth > 0 ? '↑' : '↓'} {Math.abs(data.growth)}%
+                    </span>
+                  </div>
+                )}
+              </>
+            )}
+            
+            {data.isFirstPeriod && (
+              <div className="mt-2 pt-2 border-t border-gray-100">
+                <div className="flex items-center gap-1 text-xs text-blue-600">
+                  <Info className="w-3 h-3" />
+                  <span>First period in dataset</span>
+                </div>
+              </div>
+            )}
+            
+            {!isCumulative && data.calculation && (
+              <div className="mt-2 pt-2 border-t border-gray-100">
+                <p className="text-xs text-gray-500">{data.calculation}</p>
+              </div>
             )}
           </div>
         </div>
@@ -526,6 +655,19 @@ const HistoricalDataChart: React.FC = () => {
   const config = getDataPointConfig(formData.data_point);
   const stats = calculateStats();
   const chartData = formatChartData();
+  const cumulativeData = formatCumulativeData();
+
+  // Debug logging
+  useEffect(() => {
+    if (chartData.length > 0) {
+      console.log('First data point analysis:', {
+        mode: conversionMode,
+        firstPoint: chartData[0],
+        allData: chartData,
+        cumulativeData: cumulativeData
+      });
+    }
+  }, [chartData, conversionMode, cumulativeData]);
 
   if (loginLoading) {
     return (
@@ -567,12 +709,17 @@ const HistoricalDataChart: React.FC = () => {
             <div>
               <h1 className="text-3xl font-bold text-gray-800 mb-2 flex items-center gap-3">
                 <TrendingUp className="w-8 h-8 text-blue-600" />
-                Historical Energy Data
-                <span className="text-sm bg-green-100 text-green-800 px-2 py-1 rounded-full">
-                  Production Mode (Current - Previous)
+                Professional Energy Data Analysis
+                <span className={`text-sm px-2 py-1 rounded-full ${conversionMode === 'cumulative' ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800'}`}>
+                  {conversionMode === 'cumulative' ? 'Cumulative View' : 'Period Production'}
                 </span>
               </h1>
-              <p className="text-gray-600">Analyze energy production by calculating difference between consecutive periods</p>
+              <p className="text-gray-600">
+                {conversionMode === 'cumulative' 
+                  ? 'Viewing cumulative energy data (Wh → kWh conversion)'
+                  : `Calculating ${getQueryTypeDescription().toLowerCase()} production: Current Cumulative - Previous Cumulative`
+                }
+              </p>
             </div>
             
             <div className="flex items-center gap-3">
@@ -620,7 +767,7 @@ const HistoricalDataChart: React.FC = () => {
             
             <div className="flex items-center gap-2 px-4 py-2 bg-white rounded-lg border border-gray-200 shadow-sm">
               <config.icon className="w-4 h-4" style={{ color: config.color }} />
-              <span className="text-sm font-medium text-gray-700">Parameter</span>
+              <span className="text-sm font-medium text-gray-700">Data Point</span>
               <span className="text-sm text-gray-900">{config.label}</span>
             </div>
             
@@ -629,7 +776,32 @@ const HistoricalDataChart: React.FC = () => {
               <span className="text-sm font-medium text-gray-700">Data Points</span>
               <span className="text-sm text-gray-900">{chartData.length}</span>
             </div>
+
+            <div className="flex items-center gap-2 px-4 py-2 bg-white rounded-lg border border-gray-200 shadow-sm">
+              <Calculator className="w-4 h-4 text-amber-500" />
+              <span className="text-sm font-medium text-gray-700">Conversion</span>
+              <span className="text-sm text-gray-900">
+                {conversionMode === 'cumulative' ? 'Wh → kWh' : 'Cumulative → Period'}
+              </span>
+            </div>
           </div>
+
+          {/* First Data Point Status */}
+          {chartData.length > 0 && (
+            <div className="mt-4 flex items-center gap-2 px-4 py-2 bg-white rounded-lg border border-gray-200 shadow-sm">
+              <div className={`w-2 h-2 rounded-full ${chartData[0].value > 0 ? 'bg-green-500' : 'bg-yellow-500'}`}></div>
+              <span className="text-sm font-medium text-gray-700">First Data Point:</span>
+              <span className="text-sm text-gray-900">{chartData[0].date}</span>
+              <span className={`text-sm ${chartData[0].value > 0 ? 'text-green-600' : 'text-yellow-600'}`}>
+                {chartData[0].value.toFixed(2)} kWh
+              </span>
+              {conversionMode === 'period' && chartData[0].isFirstPeriod && (
+                <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded-full">
+                  First period calculation
+                </span>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
@@ -642,6 +814,43 @@ const HistoricalDataChart: React.FC = () => {
                 Data Configuration
               </h3>
               
+              {/* Data Mode Selection */}
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Data Display Mode
+                </label>
+                <div className="space-y-2">
+                  <button 
+                    onClick={() => setConversionMode('period')} 
+                    className={`w-full text-left px-4 py-3 rounded-lg border transition ${
+                      conversionMode === 'period' 
+                        ? 'border-green-500 bg-green-50 text-green-700' 
+                        : 'border-gray-200 hover:border-gray-300'
+                    }`}
+                  >
+                    <p className="font-semibold">Period Production</p>
+                    <p className="text-xs text-gray-500">Current - Previous calculation</p>
+                    <div className="text-xs text-gray-600 mt-1">
+                      Formula: P = C<sub>n</sub> - C<sub>n-1</sub>
+                    </div>
+                  </button>
+                  <button 
+                    onClick={() => setConversionMode('cumulative')} 
+                    className={`w-full text-left px-4 py-3 rounded-lg border transition ${
+                      conversionMode === 'cumulative' 
+                        ? 'border-blue-500 bg-blue-50 text-blue-700' 
+                        : 'border-gray-200 hover:border-gray-300'
+                    }`}
+                  >
+                    <p className="font-semibold">Cumulative Data</p>
+                    <p className="text-xs text-gray-500">Direct Wh → kWh conversion</p>
+                    <div className="text-xs text-gray-600 mt-1">
+                      Conversion: kWh = Wh ÷ 1000
+                    </div>
+                  </button>
+                </div>
+              </div>
+
               {/* Query Type Selection */}
               <div className="mb-4">
                 <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -695,13 +904,13 @@ const HistoricalDataChart: React.FC = () => {
                   onChange={handleInputChange}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition"
                 >
-                  <option value="p2">p2 - Total Energy (Wh)</option>
+                  <option value="p2">p2 - Total Energy (Wh/kWh)</option>
                   <option value="p1">p1 - Total Power (W)</option>
                   <option value="p14">p14 - Grid Voltage (V)</option>
                   <option value="p21">p21 - Output Current (A)</option>
                   <option value="p24">p24 - Output Power (W)</option>
                   <option value="p25">p25 - Temperature (°C)</option>
-                  <option value="p87">p87 - Today Energy (Wh)</option>
+                  <option value="p87">p87 - Today Energy (Wh/kWh)</option>
                 </select>
               </div>
 
@@ -847,31 +1056,35 @@ const HistoricalDataChart: React.FC = () => {
               )}
             </div>
 
-            {/* Quick Stats */}
-            {stats && (
+            {/* Conversion Stats */}
+            {stats && chartData.length > 0 && (
               <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
-                <h3 className="text-lg font-semibold text-gray-900 mb-4">Quick Stats</h3>
+                <h3 className="text-lg font-semibold text-gray-900 mb-4">
+                  {conversionMode === 'cumulative' ? 'Cumulative Stats' : 'Production Stats'}
+                </h3>
                 <div className="space-y-3">
                   <div className="flex justify-between items-center">
                     <span className="text-sm text-gray-600">Periods Analyzed</span>
                     <span className="font-semibold text-gray-900">{stats.count}</span>
                   </div>
                   <div className="flex justify-between items-center">
-                    <span className="text-sm text-gray-600">Total Production</span>
-                    <span className="font-semibold text-gray-900">{stats.sum.toLocaleString()} {config.unit}</span>
+                    <span className="text-sm text-gray-600">First Period</span>
+                    <span className="font-semibold text-gray-900">{chartData[0]?.date}</span>
                   </div>
                   <div className="flex justify-between items-center">
-                    <span className="text-sm text-gray-600">Average per Period</span>
-                    <span className="font-semibold text-gray-900">{stats.avg.toLocaleString(undefined, {maximumFractionDigits: 0})} {config.unit}</span>
+                    <span className="text-sm text-gray-600">First Value</span>
+                    <span className="font-semibold text-blue-600">{stats.firstValue.toFixed(2)} kWh</span>
                   </div>
                   <div className="flex justify-between items-center">
-                    <span className="text-sm text-gray-600">Peak Period</span>
-                    <span className="font-semibold text-gray-900 text-xs">{stats.maxPeriod}</span>
+                    <span className="text-sm text-gray-600">Latest Value</span>
+                    <span className="font-semibold text-green-600">{stats.lastValue.toFixed(2)} kWh</span>
                   </div>
                   <div className="flex justify-between items-center">
-                    <span className="text-sm text-gray-600">Growth</span>
+                    <span className="text-sm text-gray-600">
+                      {conversionMode === 'cumulative' ? 'Total Growth' : 'Total Production'}
+                    </span>
                     <span className={`font-semibold ${parseFloat(stats.growth) > 0 ? 'text-green-600' : 'text-red-600'}`}>
-                      {stats.growth}%
+                      {conversionMode === 'cumulative' ? `${stats.growth}%` : `${stats.sum.toFixed(2)} kWh`}
                     </span>
                   </div>
                 </div>
@@ -889,11 +1102,22 @@ const HistoricalDataChart: React.FC = () => {
                     <div>
                       <h2 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
                         <BarChart3 className="w-7 h-7 text-blue-600" />
-                        {getQueryTypeDescription()} Energy Production
-                        <span className="text-sm bg-blue-100 text-blue-800 px-2 py-1 rounded-full">
-                          Current {getQueryTypeDescription().slice(0, -2)} - Previous {getQueryTypeDescription().slice(0, -2)}
+                        {conversionMode === 'cumulative' 
+                          ? `Cumulative Energy Data (kWh)`
+                          : `${getQueryTypeDescription()} Energy Production (kWh)`
+                        }
+                        <span className={`text-sm px-2 py-1 rounded-full ${conversionMode === 'cumulative' ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800'}`}>
+                          {conversionMode === 'cumulative' 
+                            ? 'Wh ÷ 1000 = kWh'
+                            : 'Current Cumulative - Previous Cumulative'
+                          }
                         </span>
                       </h2>
+                      {chartData.length > 0 && (
+                        <p className="text-gray-600 mt-1">
+                          {chartData.length} data points • First: {chartData[0].date} ({chartData[0].value.toFixed(2)} kWh)
+                        </p>
+                      )}
                     </div>
                     <div className="flex items-center gap-3">
                       <div className="flex bg-gray-100 rounded-lg p-1">
@@ -969,31 +1193,33 @@ const HistoricalDataChart: React.FC = () => {
                             stroke="#6b7280"
                             tickFormatter={(value) => value.toLocaleString()}
                             label={{ 
-                              value: `${config.label} (${config.unit})`, 
+                              value: conversionMode === 'cumulative' ? 'Cumulative Energy (kWh)' : 'Period Production (kWh)', 
                               angle: -90, 
                               position: 'insideLeft',
                               offset: 10
                             }}
+                            domain={['auto', 'auto']}
                           />
                           <Tooltip content={<CustomTooltip />} />
                           <Legend />
                           <Area 
                             type="monotone" 
                             dataKey="value" 
-                            name={`${getQueryTypeDescription()} Production`}
+                            name={conversionMode === 'cumulative' ? 'Cumulative Energy' : 'Period Production'}
                             stroke={config.color} 
                             strokeWidth={2}
                             fill="url(#colorValue)"
+                            connectNulls={true}
                           />
-                          {stats && (
+                          {stats && chartData[0]?.value > 0 && (
                             <ReferenceLine 
-                              y={stats.avg} 
-                              stroke="#666" 
+                              x={chartData[0].date}
+                              stroke="#3B82F6"
                               strokeDasharray="3 3"
                               label={{ 
-                                value: `Avg: ${stats.avg.toLocaleString(undefined, {maximumFractionDigits: 0})}`, 
-                                position: 'right',
-                                fill: '#666',
+                                value: 'First Data Point', 
+                                position: 'top',
+                                fill: '#3B82F6',
                                 fontSize: 12
                               }}
                             />
@@ -1015,36 +1241,25 @@ const HistoricalDataChart: React.FC = () => {
                             stroke="#6b7280"
                             tickFormatter={(value) => value.toLocaleString()}
                             label={{ 
-                              value: `${config.label} (${config.unit})`, 
+                              value: conversionMode === 'cumulative' ? 'Cumulative Energy (kWh)' : 'Period Production (kWh)', 
                               angle: -90, 
                               position: 'insideLeft',
                               offset: 10
                             }}
+                            domain={['auto', 'auto']}
                           />
                           <Tooltip content={<CustomTooltip />} />
                           <Legend />
                           <Line 
                             type="monotone" 
                             dataKey="value" 
-                            name={`${getQueryTypeDescription()} Production`}
+                            name={conversionMode === 'cumulative' ? 'Cumulative Energy' : 'Period Production'}
                             stroke={config.color} 
                             strokeWidth={3}
                             dot={{ stroke: config.color, strokeWidth: 2, r: 4 }}
                             activeDot={{ r: 8, strokeWidth: 2 }}
+                            connectNulls={true}
                           />
-                          {stats && (
-                            <ReferenceLine 
-                              y={stats.avg} 
-                              stroke="#666" 
-                              strokeDasharray="3 3"
-                              label={{ 
-                                value: `Avg: ${stats.avg.toLocaleString(undefined, {maximumFractionDigits: 0})}`, 
-                                position: 'right',
-                                fill: '#666',
-                                fontSize: 12
-                              }}
-                            />
-                          )}
                         </LineChart>
                       </ResponsiveContainer>
                     ) : (
@@ -1062,34 +1277,22 @@ const HistoricalDataChart: React.FC = () => {
                             stroke="#6b7280"
                             tickFormatter={(value) => value.toLocaleString()}
                             label={{ 
-                              value: `${config.label} (${config.unit})`, 
+                              value: conversionMode === 'cumulative' ? 'Cumulative Energy (kWh)' : 'Period Production (kWh)', 
                               angle: -90, 
                               position: 'insideLeft',
                               offset: 10
                             }}
+                            domain={[0, 'auto']}
                           />
                           <Tooltip content={<CustomTooltip />} />
                           <Legend />
                           <Bar 
                             dataKey="value" 
-                            name={`${getQueryTypeDescription()} Production`}
+                            name={conversionMode === 'cumulative' ? 'Cumulative Energy' : 'Period Production'}
                             fill={config.color} 
                             fillOpacity={0.8}
                             radius={[4, 4, 0, 0]}
                           />
-                          {stats && (
-                            <ReferenceLine 
-                              y={stats.avg} 
-                              stroke="#666" 
-                              strokeDasharray="3 3"
-                              label={{ 
-                                value: `Avg: ${stats.avg.toLocaleString(undefined, {maximumFractionDigits: 0})}`, 
-                                position: 'right',
-                                fill: '#666',
-                                fontSize: 12
-                              }}
-                            />
-                          )}
                         </BarChart>
                       </ResponsiveContainer>
                     )}
@@ -1101,78 +1304,134 @@ const HistoricalDataChart: React.FC = () => {
                   <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
                     <h3 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
                       <Activity className="w-6 h-6 text-blue-600" />
-                      Production Statistics
+                      {conversionMode === 'cumulative' ? 'Cumulative Statistics' : 'Production Statistics'}
                     </h3>
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                       <div className="bg-blue-50 rounded-lg p-4">
-                        <p className="text-xs text-gray-600 mb-1">Total Production</p>
-                        <p className="font-semibold text-gray-900">{stats.sum.toLocaleString()} {config.unit}</p>
-                        <p className="text-sm text-gray-600">{(stats.sum / 1000).toFixed(1)} kWh</p>
+                        <p className="text-xs text-gray-600 mb-1">
+                          {conversionMode === 'cumulative' ? 'Latest Cumulative' : 'Total Production'}
+                        </p>
+                        <p className="font-semibold text-gray-900">
+                          {conversionMode === 'cumulative' ? stats.lastValue.toFixed(2) : stats.sum.toFixed(2)} kWh
+                        </p>
+                        <p className="text-sm text-gray-600">
+                          {conversionMode === 'cumulative' ? 'Final cumulative value' : 'Sum of all periods'}
+                        </p>
                       </div>
                       <div className="bg-green-50 rounded-lg p-4">
                         <p className="text-xs text-gray-600 mb-1">Average per Period</p>
-                        <p className="font-semibold text-gray-900">{stats.avg.toLocaleString(undefined, {maximumFractionDigits: 0})} {config.unit}</p>
+                        <p className="font-semibold text-gray-900">{stats.avg.toFixed(2)} kWh</p>
                         <p className="text-sm text-gray-600">per {getQueryTypeDescription().slice(0, -2).toLowerCase()}</p>
                       </div>
                       <div className="bg-amber-50 rounded-lg p-4">
                         <p className="text-xs text-gray-600 mb-1">Peak Period</p>
                         <p className="font-semibold text-gray-900">{stats.maxPeriod}</p>
-                        <p className="text-sm text-green-600">{stats.max.toLocaleString()} {config.unit}</p>
+                        <p className="text-sm text-green-600">{stats.max} kWh</p>
                       </div>
                       <div className="bg-purple-50 rounded-lg p-4">
-                        <p className="text-xs text-gray-600 mb-1">Trend</p>
-                        <p className={`font-semibold ${parseFloat(stats.trendSlope) > 0 ? 'text-green-600' : 'text-red-600'}`}>
-                          {parseFloat(stats.trendSlope) > 0 ? '↗' : '↘'} {stats.trendSlope}%
-                        </p>
-                        <p className="text-sm text-gray-600">per period trend</p>
+                        <p className="text-xs text-gray-600 mb-1">First Period</p>
+                        <p className="font-semibold text-gray-900">{chartData[0]?.date}</p>
+                        <p className="text-sm text-blue-600">{stats.firstValue.toFixed(2)} kWh</p>
                       </div>
                     </div>
                   </div>
                 )}
                 
-                {/* Raw Data Table */}
+                {/* Data Table */}
                 <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-                  <h3 className="text-xl font-bold text-gray-800 mb-4">Production Data</h3>
+                  <h3 className="text-xl font-bold text-gray-800 mb-4">
+                    {conversionMode === 'cumulative' ? 'Cumulative Data' : 'Production Data'}
+                  </h3>
                   <div className="overflow-x-auto">
                     <table className="w-full">
                       <thead>
                         <tr className="bg-gray-100 border-b-2 border-gray-200">
                           <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Date</th>
-                          <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">
-                            {getQueryTypeDescription()} Production ({config.unit})
-                          </th>
-                          <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Cumulative ({config.unit})</th>
-                          <th className="px6 py-3 text-left text-sm font-semibold text-gray-700">In kWh</th>
-                          <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Growth</th>
+                          {conversionMode === 'cumulative' ? (
+                            <>
+                              <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Cumulative (Wh)</th>
+                              <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Cumulative (kWh)</th>
+                              <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Conversion</th>
+                              <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Status</th>
+                            </>
+                          ) : (
+                            <>
+                              <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Production (kWh)</th>
+                              <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Cumulative (kWh)</th>
+                              <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Growth %</th>
+                              <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Calculation</th>
+                              <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Status</th>
+                            </>
+                          )}
                         </tr>
                       </thead>
                       <tbody>
-                        {chartData.map((item, index) => (
-                          <tr key={index} className="border-b border-gray-200 hover:bg-gray-50">
-                            <td className="px-6 py-4 text-sm text-gray-800">{item.date}</td>
-                            <td className="px-6 py-4 text-sm font-semibold text-gray-800">
-                              {item.value.toLocaleString()}
-                            </td>
-                            <td className="px-6 py-4 text-sm text-blue-700">
-                              {item.cumulativeValue?.toLocaleString()}
-                            </td>
-                            <td className="px-6 py-4 text-sm text-green-700">
-                              {item.kwhValue?.toFixed(2)}
-                            </td>
-                            <td className="px-6 py-4">
-                              {item.growth && parseFloat(item.growth) !== 0 && (
-                                <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs ${
-                                  parseFloat(item.growth) > 0
-                                    ? 'bg-green-100 text-green-800'
-                                    : 'bg-red-100 text-red-800'
-                                }`}>
-                                  {parseFloat(item.growth) > 0 ? '↑' : '↓'} {Math.abs(parseFloat(item.growth))}%
+                        {(conversionMode === 'cumulative' ? cumulativeData : periodData).map((item, index) => (
+                          <tr key={index} className={`border-b border-gray-200 hover:bg-gray-50 ${index === 0 ? 'bg-blue-50' : ''}`}>
+                            <td className="px-6 py-4 text-sm text-gray-800">
+                              {item.date}
+                              {index === 0 && (
+                                <span className="ml-2 text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded-full">
+                                  First
                                 </span>
                               )}
-                              {(!item.growth || parseFloat(item.growth) === 0) && (
-                                <span className="text-sm text-gray-400">—</span>
-                              )}
                             </td>
+                            {conversionMode === 'cumulative' ? (
+                              <>
+                                <td className="px-6 py-4 text-sm text-gray-800">
+                                  {(item as CumulativeDataItem).originalWh.toLocaleString()}
+                                </td>
+                                <td className="px-6 py-4 text-sm text-blue-700 font-semibold">
+                                  {(item as CumulativeDataItem).cumulativeKwh.toFixed(2)}
+                                </td>
+                                <td className="px-6 py-4 text-sm text-gray-600">
+                                  ÷ 1000
+                                </td>
+                                <td className="px-6 py-4">
+                                  {index === 0 ? (
+                                    <span className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-blue-100 text-blue-800">
+                                      First data point
+                                    </span>
+                                  ) : (
+                                    <span className="text-sm text-gray-400">—</span>
+                                  )}
+                                </td>
+                              </>
+                            ) : (
+                              <>
+                                <td className="px-6 py-4 text-sm text-green-700 font-semibold">
+                                  {(item as PeriodDataItem).periodProductionKwh.toFixed(2)}
+                                </td>
+                                <td className="px-6 py-4 text-sm text-blue-700">
+                                  {(item as PeriodDataItem).cumulativeKwh.toFixed(2)}
+                                </td>
+                                <td className="px-6 py-4">
+                                  {(item as PeriodDataItem).growth !== undefined ? (
+                                    <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs ${
+                                      (item as PeriodDataItem).growth! > 0
+                                        ? 'bg-green-100 text-green-800'
+                                        : (item as PeriodDataItem).growth! < 0 ? 'bg-red-100 text-red-800' : 'bg-gray-100 text-gray-800'
+                                    }`}>
+                                      {(item as PeriodDataItem).growth! > 0 ? '↑' : (item as PeriodDataItem).growth! < 0 ? '↓' : '→'} {Math.abs((item as PeriodDataItem).growth!)}
+                                    </span>
+                                  ) : (
+                                    <span className="text-sm text-gray-400">—</span>
+                                  )}
+                                </td>
+                                <td className="px-6 py-4 text-sm text-gray-600 max-w-xs truncate">
+                                  {(item as PeriodDataItem).calculation || 'First period'}
+                                </td>
+                                <td className="px-6 py-4">
+                                  {index === 0 ? (
+                                    <span className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-green-100 text-green-800">
+                                      First period calculation
+                                    </span>
+                                  ) : (
+                                    <span className="text-sm text-gray-400">—</span>
+                                  )}
+                                </td>
+                              </>
+                            )}
                           </tr>
                         ))}
                       </tbody>
@@ -1193,7 +1452,7 @@ const HistoricalDataChart: React.FC = () => {
                     <div className="w-8 h-8 rounded-lg bg-gray-100 flex items-center justify-center">
                       <code className="text-sm font-medium">{"{}"}</code>
                     </div>
-                    <span className="font-medium text-gray-700">Raw JSON Response (Cumulative Values)</span>
+                    <span className="font-medium text-gray-700">Raw JSON Response (Cumulative Values in Wh)</span>
                   </div>
                   <ChevronRight className={`w-4 h-4 transition-transform ${showRawJson ? 'rotate-90' : ''}`} />
                 </button>
@@ -1248,7 +1507,7 @@ const HistoricalDataChart: React.FC = () => {
 
         {/* Footer */}
         <div className="mt-8 pt-6 border-t border-gray-200 text-center text-sm text-gray-500">
-          <p>Historical Energy Analytics • Production Mode (Current Period - Previous Period) • Powered by RBP India Solar Solutions</p>
+          <p>Professional Energy Analytics • Wh → kWh Conversion & Cumulative → Period Production • Powered by RBP India Solar Solutions</p>
           <p className="mt-1">Data updates on request • {new Date().toLocaleDateString()}</p>
         </div>
       </div>
