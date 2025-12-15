@@ -1,4 +1,4 @@
-// components/HistoricalDataChart.tsx - Updated with professional cumulative conversion logic
+// components/HistoricalDataChart.tsx - Fixed circular dependency issue
 import React, { useState, useEffect, useMemo } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, BarChart, Bar, Legend, ReferenceLine } from 'recharts';
 import { useDeviceContext } from '../context/DeviceContext';
@@ -330,7 +330,7 @@ const HistoricalDataChart: React.FC = () => {
     }
   };
 
-  // Format cumulative data from API - PROFESSIONAL FIXED VERSION
+  // Format cumulative data from API
   const formatCumulativeData = (): CumulativeDataItem[] => {
     if (!historicalData) return [];
     
@@ -373,7 +373,7 @@ const HistoricalDataChart: React.FC = () => {
       }
 
       const originalWh = parseFloat(item[valueKey]) || 0;
-      const cumulativeKwh = Number((originalWh / 1000).toFixed(2)); // Convert Wh to kWh and round to 2 decimals
+      const cumulativeKwh = Number((originalWh / 1000).toFixed(2));
 
       return {
         timestamp,
@@ -387,7 +387,7 @@ const HistoricalDataChart: React.FC = () => {
     });
   };
 
-  // Professional conversion: Cumulative to Period Production - FIXED VERSION
+  // Professional conversion: Cumulative to Period Production with FIRST PERIOD AS 0
   const convertCumulativeToPeriodProduction = (
     cumulativeData: CumulativeDataItem[]
   ): PeriodDataItem[] => {
@@ -398,17 +398,20 @@ const HistoricalDataChart: React.FC = () => {
     // Sort chronologically for correct calculations
     const sortedData = [...cumulativeData].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 
+    let previousProduction = 0; // Track previous production for growth calculation
+
     return sortedData.map((current, index) => {
+      // FIRST PERIOD AS 0: Production = 0 for first period
       if (index === 0) {
-        // First period: production equals cumulative
         return {
           timestamp: current.timestamp,
           date: current.date,
-          periodProductionKwh: Number(current.cumulativeKwh.toFixed(2)),
+          periodProductionKwh: 0, // FIRST PERIOD IS 0
           cumulativeKwh: current.cumulativeKwh,
           originalWh: current.originalWh,
           period: current.period,
-          calculation: 'First period: Production = Cumulative',
+          growth: 0, // No growth for first period
+          calculation: 'First period: Production = 0 kWh (no previous period to compare)',
           isFirstPeriod: true
         };
       }
@@ -423,10 +426,18 @@ const HistoricalDataChart: React.FC = () => {
         console.warn(`Negative period value detected: ${current.date} (${periodKwh.toFixed(2)} kWh). Using 0 instead.`);
       }
       
-      // Calculate growth percentage
-      const growth = previous.cumulativeKwh > 0 
-        ? Number(((current.cumulativeKwh - previous.cumulativeKwh) / previous.cumulativeKwh * 100).toFixed(1))
-        : 0;
+      // Calculate growth percentage relative to previous period's production
+      let growth = 0;
+      if (index > 1) {
+        // For growth calculation after the first period, use the previous period's production
+        // For index 1, growth is 0 because we're comparing to the first period (0)
+        growth = previousProduction > 0 
+          ? Number(((safePeriodKwh - previousProduction) / previousProduction * 100).toFixed(1))
+          : safePeriodKwh > 0 ? 100 : 0; // If previous was 0 and current > 0, growth is 100%
+      }
+
+      // Store current production for next iteration's growth calculation
+      previousProduction = safePeriodKwh;
 
       return {
         timestamp: current.timestamp,
@@ -445,17 +456,17 @@ const HistoricalDataChart: React.FC = () => {
   // Use useMemo for efficient data calculation
   const periodData = useMemo(() => {
     const cumulativeData = formatCumulativeData();
-    console.log('Cumulative Data for Conversion:', cumulativeData); // Debug log
+    console.log('Cumulative Data for Conversion:', cumulativeData);
     const result = convertCumulativeToPeriodProduction(cumulativeData);
-    console.log('Period Data Result:', result); // Debug log
+    console.log('Period Data with First Period as 0:', result);
     return result;
   }, [historicalData, formData.query_type]);
 
-  // Format data for chart based on conversion mode - FIXED VERSION
+  // Format data for chart based on conversion mode
   const formatChartData = () => {
     if (conversionMode === 'cumulative') {
       const cumulativeData = formatCumulativeData();
-      console.log('Chart Cumulative Data:', cumulativeData); // Debug log
+      console.log('Chart Cumulative Data:', cumulativeData);
       
       return cumulativeData.map(item => ({
         ...item,
@@ -468,7 +479,7 @@ const HistoricalDataChart: React.FC = () => {
         isFirstPeriod: item.isFirstPeriod
       }));
     } else {
-      console.log('Chart Period Data:', periodData); // Debug log
+      console.log('Chart Period Data:', periodData);
       return periodData.map(item => ({
         ...item,
         name: item.date,
@@ -506,7 +517,7 @@ const HistoricalDataChart: React.FC = () => {
     return types[formData.query_type] || 'Unknown';
   };
 
-  // Calculate statistics - FIXED VERSION
+  // Calculate statistics - UPDATED FOR FIRST PERIOD AS 0
   const calculateStats = () => {
     const data = formatChartData();
     if (data.length === 0) return null;
@@ -530,9 +541,13 @@ const HistoricalDataChart: React.FC = () => {
     } else {
       const periodValues = periodData.map(d => d.periodProductionKwh);
       if (periodValues.length >= 2) {
-        const firstPeriodValue = periodValues[0];
-        const lastPeriodValue = periodValues[periodValues.length - 1];
-        totalGrowth = firstPeriodValue > 0 ? ((lastPeriodValue - firstPeriodValue) / firstPeriodValue * 100) : 0;
+        // Find first non-zero period (skip the first 0)
+        const firstNonZeroIndex = periodValues.findIndex((val, idx) => idx > 0 && val > 0);
+        if (firstNonZeroIndex !== -1) {
+          const firstNonZeroValue = periodValues[firstNonZeroIndex];
+          const lastPeriodValue = periodValues[periodValues.length - 1];
+          totalGrowth = firstNonZeroValue > 0 ? ((lastPeriodValue - firstNonZeroValue) / firstNonZeroValue * 100) : 0;
+        }
       }
     }
     
@@ -547,7 +562,8 @@ const HistoricalDataChart: React.FC = () => {
       growth: totalGrowth.toFixed(1),
       totalGrowth,
       firstValue: values[0] || 0,
-      lastValue: values[values.length - 1] || 0
+      lastValue: values[values.length - 1] || 0,
+      nonZeroPeriods: values.filter(v => v > 0).length
     };
   };
 
@@ -581,7 +597,7 @@ const HistoricalDataChart: React.FC = () => {
     window.URL.revokeObjectURL(url);
   };
 
-  // Custom Tooltip component - IMPROVED VERSION
+  // Custom Tooltip component - UPDATED FOR FIRST PERIOD AS 0
   const CustomTooltip = ({ active, payload, label }: any) => {
     if (active && payload && payload.length) {
       const data = payload[0].payload;
@@ -610,7 +626,7 @@ const HistoricalDataChart: React.FC = () => {
               <>
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-gray-600">{getQueryTypeDescription()} Production:</span>
-                  <span className="font-semibold text-green-600 ml-2">
+                  <span className={`font-semibold ${data.isFirstPeriod ? 'text-gray-500' : 'text-green-600'} ml-2`}>
                     {data.periodProductionKwh?.toFixed(2) || data.value?.toFixed(2)} kWh
                   </span>
                 </div>
@@ -620,22 +636,22 @@ const HistoricalDataChart: React.FC = () => {
                     {data.cumulativeValue?.toFixed(2) || data.cumulativeKwh?.toFixed(2)} kWh
                   </span>
                 </div>
-                {data.growth !== undefined && (
+                {data.growth !== undefined && !data.isFirstPeriod && (
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-gray-600">Growth:</span>
-                    <span className={`font-semibold ${data.growth > 0 ? 'text-green-600' : 'text-red-600'}`}>
-                      {data.growth > 0 ? '↑' : '↓'} {Math.abs(data.growth)}%
+                    <span className={`font-semibold ${data.growth > 0 ? 'text-green-600' : data.growth < 0 ? 'text-red-600' : 'text-gray-600'}`}>
+                      {data.growth > 0 ? '↑' : data.growth < 0 ? '↓' : '→'} {Math.abs(data.growth)}%
                     </span>
                   </div>
                 )}
               </>
             )}
             
-            {data.isFirstPeriod && (
+            {data.isFirstPeriod && conversionMode === 'period' && (
               <div className="mt-2 pt-2 border-t border-gray-100">
-                <div className="flex items-center gap-1 text-xs text-blue-600">
+                <div className="flex items-center gap-1 text-xs text-gray-600">
                   <Info className="w-3 h-3" />
-                  <span>First period in dataset</span>
+                  <span>First period production set to 0 (no previous period to compare)</span>
                 </div>
               </div>
             )}
@@ -657,17 +673,18 @@ const HistoricalDataChart: React.FC = () => {
   const chartData = formatChartData();
   const cumulativeData = formatCumulativeData();
 
-  // Debug logging
+  // Debug logging - FIXED: Removed circular dependency
   useEffect(() => {
     if (chartData.length > 0) {
-      console.log('First data point analysis:', {
+      console.log('Chart Data Analysis:', {
         mode: conversionMode,
         firstPoint: chartData[0],
-        allData: chartData,
-        cumulativeData: cumulativeData
+        allDataCount: chartData.length,
+        cumulativeDataCount: cumulativeData.length,
+        periodDataCount: periodData.length
       });
     }
-  }, [chartData, conversionMode, cumulativeData]);
+  }, [chartData, conversionMode, cumulativeData, periodData]);
 
   if (loginLoading) {
     return (
@@ -717,7 +734,7 @@ const HistoricalDataChart: React.FC = () => {
               <p className="text-gray-600">
                 {conversionMode === 'cumulative' 
                   ? 'Viewing cumulative energy data (Wh → kWh conversion)'
-                  : `Calculating ${getQueryTypeDescription().toLowerCase()} production: Current Cumulative - Previous Cumulative`
+                  : `Calculating ${getQueryTypeDescription().toLowerCase()} production: Current Cumulative - Previous Cumulative • First period = 0 kWh`
                 }
               </p>
             </div>
@@ -786,20 +803,17 @@ const HistoricalDataChart: React.FC = () => {
             </div>
           </div>
 
-          {/* First Data Point Status */}
-          {chartData.length > 0 && (
-            <div className="mt-4 flex items-center gap-2 px-4 py-2 bg-white rounded-lg border border-gray-200 shadow-sm">
-              <div className={`w-2 h-2 rounded-full ${chartData[0].value > 0 ? 'bg-green-500' : 'bg-yellow-500'}`}></div>
-              <span className="text-sm font-medium text-gray-700">First Data Point:</span>
-              <span className="text-sm text-gray-900">{chartData[0].date}</span>
-              <span className={`text-sm ${chartData[0].value > 0 ? 'text-green-600' : 'text-yellow-600'}`}>
-                {chartData[0].value.toFixed(2)} kWh
+          {/* First Period Information */}
+          {conversionMode === 'period' && chartData.length > 0 && (
+            <div className="mt-4 flex items-center gap-2 px-4 py-2 bg-gray-50 rounded-lg border border-gray-200">
+              <div className="w-2 h-2 rounded-full bg-gray-500"></div>
+              <span className="text-sm font-medium text-gray-700">First Period Logic:</span>
+              <span className="text-sm text-gray-900">
+                Production = 0 kWh (no previous period to compare)
               </span>
-              {conversionMode === 'period' && chartData[0].isFirstPeriod && (
-                <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded-full">
-                  First period calculation
-                </span>
-              )}
+              <span className="text-sm text-gray-600 ml-2">
+                • {chartData[0].date}: <span className="font-semibold">0 kWh</span>
+              </span>
             </div>
           )}
         </div>
@@ -832,6 +846,9 @@ const HistoricalDataChart: React.FC = () => {
                     <p className="text-xs text-gray-500">Current - Previous calculation</p>
                     <div className="text-xs text-gray-600 mt-1">
                       Formula: P = C<sub>n</sub> - C<sub>n-1</sub>
+                    </div>
+                    <div className="text-xs text-amber-600 mt-1">
+                      First period = 0 kWh
                     </div>
                   </button>
                   <button 
@@ -1073,12 +1090,20 @@ const HistoricalDataChart: React.FC = () => {
                   </div>
                   <div className="flex justify-between items-center">
                     <span className="text-sm text-gray-600">First Value</span>
-                    <span className="font-semibold text-blue-600">{stats.firstValue.toFixed(2)} kWh</span>
+                    <span className={`font-semibold ${conversionMode === 'period' ? 'text-gray-500' : 'text-blue-600'}`}>
+                      {stats.firstValue.toFixed(2)} kWh
+                    </span>
                   </div>
                   <div className="flex justify-between items-center">
                     <span className="text-sm text-gray-600">Latest Value</span>
                     <span className="font-semibold text-green-600">{stats.lastValue.toFixed(2)} kWh</span>
                   </div>
+                  {conversionMode === 'period' && (
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm text-gray-600">Non-Zero Periods</span>
+                      <span className="font-semibold text-gray-900">{stats.nonZeroPeriods}</span>
+                    </div>
+                  )}
                   <div className="flex justify-between items-center">
                     <span className="text-sm text-gray-600">
                       {conversionMode === 'cumulative' ? 'Total Growth' : 'Total Production'}
@@ -1198,7 +1223,6 @@ const HistoricalDataChart: React.FC = () => {
                               position: 'insideLeft',
                               offset: 10
                             }}
-                            domain={['auto', 'auto']}
                           />
                           <Tooltip content={<CustomTooltip />} />
                           <Legend />
@@ -1209,17 +1233,16 @@ const HistoricalDataChart: React.FC = () => {
                             stroke={config.color} 
                             strokeWidth={2}
                             fill="url(#colorValue)"
-                            connectNulls={true}
                           />
-                          {stats && chartData[0]?.value > 0 && (
+                          {conversionMode === 'period' && chartData[0]?.value === 0 && (
                             <ReferenceLine 
                               x={chartData[0].date}
-                              stroke="#3B82F6"
+                              stroke="#6B7280"
                               strokeDasharray="3 3"
                               label={{ 
-                                value: 'First Data Point', 
+                                value: 'First period: 0 kWh', 
                                 position: 'top',
-                                fill: '#3B82F6',
+                                fill: '#6B7280',
                                 fontSize: 12
                               }}
                             />
@@ -1246,7 +1269,6 @@ const HistoricalDataChart: React.FC = () => {
                               position: 'insideLeft',
                               offset: 10
                             }}
-                            domain={['auto', 'auto']}
                           />
                           <Tooltip content={<CustomTooltip />} />
                           <Legend />
@@ -1258,7 +1280,6 @@ const HistoricalDataChart: React.FC = () => {
                             strokeWidth={3}
                             dot={{ stroke: config.color, strokeWidth: 2, r: 4 }}
                             activeDot={{ r: 8, strokeWidth: 2 }}
-                            connectNulls={true}
                           />
                         </LineChart>
                       </ResponsiveContainer>
@@ -1282,7 +1303,6 @@ const HistoricalDataChart: React.FC = () => {
                               position: 'insideLeft',
                               offset: 10
                             }}
-                            domain={[0, 'auto']}
                           />
                           <Tooltip content={<CustomTooltip />} />
                           <Legend />
@@ -1331,7 +1351,9 @@ const HistoricalDataChart: React.FC = () => {
                       <div className="bg-purple-50 rounded-lg p-4">
                         <p className="text-xs text-gray-600 mb-1">First Period</p>
                         <p className="font-semibold text-gray-900">{chartData[0]?.date}</p>
-                        <p className="text-sm text-blue-600">{stats.firstValue.toFixed(2)} kWh</p>
+                        <p className={`text-sm ${conversionMode === 'period' ? 'text-gray-500' : 'text-blue-600'}`}>
+                          {stats.firstValue.toFixed(2)} kWh
+                        </p>
                       </div>
                     </div>
                   </div>
@@ -1367,11 +1389,11 @@ const HistoricalDataChart: React.FC = () => {
                       </thead>
                       <tbody>
                         {(conversionMode === 'cumulative' ? cumulativeData : periodData).map((item, index) => (
-                          <tr key={index} className={`border-b border-gray-200 hover:bg-gray-50 ${index === 0 ? 'bg-blue-50' : ''}`}>
+                          <tr key={index} className={`border-b border-gray-200 hover:bg-gray-50 ${index === 0 ? 'bg-gray-50' : ''}`}>
                             <td className="px-6 py-4 text-sm text-gray-800">
                               {item.date}
                               {index === 0 && (
-                                <span className="ml-2 text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded-full">
+                                <span className="ml-2 text-xs bg-gray-100 text-gray-800 px-2 py-1 rounded-full">
                                   First
                                 </span>
                               )}
@@ -1399,14 +1421,14 @@ const HistoricalDataChart: React.FC = () => {
                               </>
                             ) : (
                               <>
-                                <td className="px-6 py-4 text-sm text-green-700 font-semibold">
+                                <td className={`px-6 py-4 text-sm font-semibold ${index === 0 ? 'text-gray-500' : 'text-green-700'}`}>
                                   {(item as PeriodDataItem).periodProductionKwh.toFixed(2)}
                                 </td>
                                 <td className="px-6 py-4 text-sm text-blue-700">
                                   {(item as PeriodDataItem).cumulativeKwh.toFixed(2)}
                                 </td>
                                 <td className="px-6 py-4">
-                                  {(item as PeriodDataItem).growth !== undefined ? (
+                                  {index > 0 ? (
                                     <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs ${
                                       (item as PeriodDataItem).growth! > 0
                                         ? 'bg-green-100 text-green-800'
@@ -1419,12 +1441,12 @@ const HistoricalDataChart: React.FC = () => {
                                   )}
                                 </td>
                                 <td className="px-6 py-4 text-sm text-gray-600 max-w-xs truncate">
-                                  {(item as PeriodDataItem).calculation || 'First period'}
+                                  {(item as PeriodDataItem).calculation}
                                 </td>
                                 <td className="px-6 py-4">
                                   {index === 0 ? (
-                                    <span className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-green-100 text-green-800">
-                                      First period calculation
+                                    <span className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-gray-100 text-gray-800">
+                                      First period: 0 kWh
                                     </span>
                                   ) : (
                                     <span className="text-sm text-gray-400">—</span>
@@ -1508,7 +1530,7 @@ const HistoricalDataChart: React.FC = () => {
         {/* Footer */}
         <div className="mt-8 pt-6 border-t border-gray-200 text-center text-sm text-gray-500">
           <p>Professional Energy Analytics • Wh → kWh Conversion & Cumulative → Period Production • Powered by RBP India Solar Solutions</p>
-          <p className="mt-1">Data updates on request • {new Date().toLocaleDateString()}</p>
+          <p className="mt-1">First period production = 0 kWh (no previous period to compare) • {new Date().toLocaleDateString()}</p>
         </div>
       </div>
     </div>
