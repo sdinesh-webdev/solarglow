@@ -54,6 +54,7 @@ import {
   CumulativeDataItem,
   PeriodDataItem
 } from '../types/solarData';
+import AutoLogin from './AutoLogin'; // Import AutoLogin component
 
 // Extended interface for daily data with cumulative fields
 interface ExtendedDailyDataItem extends Omit<DailyDataItem, 'value' | 'formattedValue'> {
@@ -170,18 +171,6 @@ const CombinedAreaChart: React.FC = () => {
     endYear: '2025'
   });
 
-  // Auto login and serial number states
-  const [autoLoginEnabled, setAutoLoginEnabled] = useState<boolean>(() => {
-    const saved = localStorage.getItem('autoLoginEnabled');
-    return saved ? JSON.parse(saved) : true;
-  });
-  
-  const [serialNumber, setSerialNumber] = useState<string>(() => {
-    return localStorage.getItem('serialNumber') || 'I2460100212';
-  });
-  
-  const [showDeviceDetails, setShowDeviceDetails] = useState(false);
-
   // Chart config
   const [chartConfig, setChartConfig] = useState({
     showGrid: true,
@@ -213,17 +202,27 @@ const CombinedAreaChart: React.FC = () => {
     'Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'
   ];
 
-  // Save auto login preference to localStorage
-  useEffect(() => {
-    localStorage.setItem('autoLoginEnabled', JSON.stringify(autoLoginEnabled));
-  }, [autoLoginEnabled]);
+  // Handle token change from AutoLogin component
+  const handleTokenChange = (newToken: string) => {
+    setToken(newToken);
+  };
 
-  // Save serial number to localStorage
-  useEffect(() => {
-    localStorage.setItem('serialNumber', serialNumber);
-  }, [serialNumber]);
+  // Handle device data change from AutoLogin component
+  const handleDeviceDataChange = (deviceData: DevicePoint | null) => {
+    setDeviceData(deviceData);
+  };
 
-  // Initialize dates and auto login on mount
+  // Update PS Key from context and fetch device data if available
+  useEffect(() => {
+    if (psKey) {
+      setMinuteForm(prev => ({ ...prev, ps_key_list: psKey }));
+      setDailyForm(prev => ({ ...prev, ps_key: psKey }));
+      setMonthlyForm(prev => ({ ...prev, ps_key: psKey }));
+      setYearlyForm(prev => ({ ...prev, ps_key: psKey }));
+    }
+  }, [psKey]);
+
+  // Initialize dates on mount
   useEffect(() => {
     const now = new Date();
     const twoHoursAgo = new Date(now.getTime() - 2 * 60 * 60 * 1000);
@@ -316,27 +315,7 @@ const CombinedAreaChart: React.FC = () => {
       start_year: (parseInt(currentYear) - 3).toString(),
       end_year: currentYear
     }));
-
-    // Auto login if enabled
-    if (autoLoginEnabled) {
-      handleLogin();
-    }
   }, []);
-
-  // Update PS Key from context and fetch device data if available
-  useEffect(() => {
-    if (psKey) {
-      setMinuteForm(prev => ({ ...prev, ps_key_list: psKey }));
-      setDailyForm(prev => ({ ...prev, ps_key: psKey }));
-      setMonthlyForm(prev => ({ ...prev, ps_key: psKey }));
-      setYearlyForm(prev => ({ ...prev, ps_key: psKey }));
-      
-      // If we have a token, try to fetch device data
-      if (token) {
-        fetchDeviceDataByPsKey();
-      }
-    }
-  }, [psKey, token]);
 
   // Format date for API based on query_type
   const formatDateForAPI = (date: Date, queryType: string): string => {
@@ -365,146 +344,6 @@ const CombinedAreaChart: React.FC = () => {
       case '3': // Yearly: YYYY
         return dateStr;
       default: return dateStr;
-    }
-  };
-
-  // Login function with auto-retry
-  const handleLogin = async (retryCount = 0) => {
-    setLoading(prev => ({ ...prev, login: true }));
-    setError('');
-
-    try {
-      const response = await fetch('http://localhost:3000/api/solar/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          user_account: 'sahoo@rbpindia.com',
-          user_password: 'rbpindia@2025'
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const result: LoginResponse = await response.json();
-      
-      if (result.result_code === "1") {
-        setToken(result.result_data?.token || '');
-        console.log('Login successful, token set');
-        
-        // If we have a serial number, fetch device data
-        if (serialNumber) {
-          fetchDeviceDataBySerial(result.result_data?.token || '');
-        }
-      } else {
-        // Retry logic for transient failures
-        if (retryCount < 2 && result.result_msg.includes('busy')) {
-          console.log(`Retry ${retryCount + 1} after busy error`);
-          setTimeout(() => handleLogin(retryCount + 1), 2000);
-          return;
-        }
-        setError(`Login failed: ${result.result_msg}`);
-      }
-    } catch (err: any) {
-      // Retry logic for network errors
-      if (retryCount < 2) {
-        console.log(`Retry ${retryCount + 1} after error:`, err.message);
-        setTimeout(() => handleLogin(retryCount + 1), 2000);
-        return;
-      }
-      console.error('Login error details:', err);
-      setError(`Login error: ${err.message || 'Unknown error'}`);
-    } finally {
-      setLoading(prev => ({ ...prev, login: false }));
-    }
-  };
-
-  // Fetch device data by serial number
-  const fetchDeviceDataBySerial = async (tokenParam?: string) => {
-    const actualToken = tokenParam || token;
-    
-    if (!actualToken) {
-      setError('No login token available. Please login first.');
-      return;
-    }
-
-    if (!serialNumber.trim()) {
-      setError('Please enter a serial number');
-      return;
-    }
-
-    setLoading(prev => ({ ...prev, device: true }));
-    setError('');
-
-    try {
-      const response = await fetch('http://localhost:3000/api/solar/inverter-data', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          token: actualToken,
-          sn_list: [serialNumber.trim()]
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const result: DeviceDataResponse = await response.json();
-      
-      if (result.result_code === "1") {
-        const devicePoint = result.result_data?.device_point_list?.[0]?.device_point;
-        if (devicePoint) {
-          setDeviceData(devicePoint);
-          const newPsKey = devicePoint.ps_key;
-          setPsKey(newPsKey); // Update context
-          console.log('Device data fetched, PS Key:', newPsKey);
-          setShowDeviceDetails(true);
-        } else {
-          setError('No device data found for the serial number');
-        }
-      } else {
-        setError(`Device fetch failed: ${result.result_msg}`);
-      }
-    } catch (err: any) {
-      console.error('Device fetch error:', err);
-      setError(`Device fetch error: ${err.message || 'Unknown error'}`);
-    } finally {
-      setLoading(prev => ({ ...prev, device: false }));
-    }
-  };
-
-  // Fetch device data by PS Key (for when PS Key is already known)
-  const fetchDeviceDataByPsKey = async () => {
-    if (!token) {
-      return;
-    }
-
-    setLoading(prev => ({ ...prev, device: true }));
-
-    try {
-      // This is a simplified version - you might need to adjust the API endpoint
-      // based on what's available in your backend
-      const response = await fetch('http://localhost:3000/api/solar/inverter-data-by-pskey', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          token: token,
-          ps_key: psKey
-        })
-      });
-
-      if (response.ok) {
-        const result = await response.json();
-        if (result.result_code === "1") {
-          setDeviceData(result.result_data?.device_point);
-        }
-      }
-    } catch (err) {
-      console.error('Error fetching device data by PS Key:', err);
-    } finally {
-      setLoading(prev => ({ ...prev, device: false }));
     }
   };
 
@@ -2421,16 +2260,6 @@ const CombinedAreaChart: React.FC = () => {
     }
   };
 
-  // Render device details
-  const renderDeviceDetails = () => {
-    if (!deviceData) return null;
-
-    return (
-      <div className=""></div>
-      
-    );
-  };
-
   return (
     <div className={`min-h-screen ${isFullScreen ? 'overflow-hidden' : 'bg-gradient-to-br from-gray-50 to-gray-100 p-4 md:p-6'}`}>
       {!isFullScreen && (
@@ -2493,40 +2322,16 @@ const CombinedAreaChart: React.FC = () => {
                   </div>
                 )}
                 
-                {/* Auto Login Toggle */}
-                <div className="flex items-center gap-2 bg-white px-4 py-2 rounded-lg shadow-sm border border-gray-200">
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      id="auto-login"
-                      checked={autoLoginEnabled}
-                      onChange={(e) => setAutoLoginEnabled(e.target.checked)}
-                      className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
-                    />
-                    <label htmlFor="auto-login" className="text-sm text-gray-700">
-                      Auto Login
-                    </label>
-                  </div>
-                </div>
-                
+                {/* Token Status from AutoLogin */}
                 {token && (
                   <div className="flex items-center gap-3 bg-white px-4 py-2 rounded-lg shadow-sm border border-gray-200">
                     <CheckCircle className="w-5 h-5 text-green-500" />
                     <div className="hidden md:block">
                       <p className="text-sm font-medium text-gray-900">Logged In</p>
-                      <p className="text-xs text-gray-500">Token: {token.substring(0, 20)}...</p>
+                      <p className="text-xs text-gray-500 truncate">Token: {token.substring(0, 20)}...</p>
                     </div>
                   </div>
                 )}
-                
-                <button
-                  onClick={handleLogin}
-                  disabled={loading.login}
-                  className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium transition flex items-center gap-2"
-                >
-                  <RefreshCw className={`w-4 h-4 ${loading.login ? 'animate-spin' : ''}`} />
-                  {loading.login ? 'Logging in...' : 'Refresh Token'}
-                </button>
               </div>
             </div>
 
@@ -2682,96 +2487,16 @@ const CombinedAreaChart: React.FC = () => {
           <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
             {/* Left Panel - Controls */}
             <div className="lg:col-span-1 space-y-6">
-              {/* Device Configuration Card */}
+              {/* AutoLogin Component */}
               <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
                 <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
                   <Server className="w-5 h-5 text-gray-600" />
-                  Device Configuration
+                  Authentication & Device
                 </h3>
-                
-                <div className="space-y-4">
-                  {/* Serial Number Input */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      <div className="flex items-center gap-2">
-                        <HardDrive className="w-4 h-4" />
-                        Serial Number
-                      </div>
-                    </label>
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        value={serialNumber}
-                        onChange={(e) => setSerialNumber(e.target.value)}
-                        className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition"
-                        placeholder="Enter device serial number"
-                      />
-                      <button
-                        onClick={() => fetchDeviceDataBySerial()}
-                        disabled={loading.device || !token}
-                        className={`px-4 py-2 rounded-lg font-medium transition flex items-center gap-2 ${
-                          loading.device || !token
-                            ? 'bg-gray-300 cursor-not-allowed text-gray-500'
-                            : 'bg-blue-600 hover:bg-blue-700 text-white'
-                        }`}
-                      >
-                        {loading.device ? (
-                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                        ) : (
-                          <Search className="w-4 h-4" />
-                        )}
-                        Fetch
-                      </button>
-                    </div>
-                    <p className="text-xs text-gray-500 mt-1">
-                      Enter inverter serial number to fetch PS Key automatically
-                    </p>
-                  </div>
-
-                  {/* PS Key Input */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      <div className="flex items-center gap-2">
-                        <Key className="w-4 h-4" />
-                        PS Key
-                      </div>
-                    </label>
-                    <input
-                      type="text"
-                      value={minuteForm.ps_key_list}
-                      onChange={(e) => setMinuteForm(prev => ({ ...prev, ps_key_list: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition"
-                      placeholder="Enter PS Key"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">
-                      Current: {psKey || 'Not set'}
-                    </p>
-                    <p className="text-xs text-gray-500 mt-1">
-                      Auto-updated from serial number fetch
-                    </p>
-                  </div>
-
-                  {/* Device Quick Actions */}
-                  {deviceData && (
-                    <div className="pt-4 border-t border-gray-200">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm font-medium text-gray-700">Device Status</span>
-                        <div className="flex items-center gap-2">
-                          <div className={`w-2 h-2 rounded-full ${deviceData.dev_status === 1 ? 'bg-green-500' : 'bg-red-500'}`}></div>
-                          <span className={`text-xs font-medium ${deviceData.dev_status === 1 ? 'text-green-700' : 'text-red-700'}`}>
-                            {deviceData.dev_status === 1 ? 'Normal' : 'Fault'}
-                          </span>
-                        </div>
-                      </div>
-                      <button
-                        onClick={() => setShowDeviceDetails(!showDeviceDetails)}
-                        className="w-full mt-2 px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition flex items-center justify-center gap-2"
-                      >
-                        {showDeviceDetails ? 'Hide' : 'Show'} Device Details
-                      </button>
-                    </div>
-                  )}
-                </div>
+                <AutoLogin 
+                  onTokenChange={handleTokenChange}
+                  onDeviceDataChange={handleDeviceDataChange}
+                />
               </div>
 
               {/* Configuration Card */}
@@ -3464,9 +3189,6 @@ const CombinedAreaChart: React.FC = () => {
               <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5" ref={chartContainerRef}>
                 {renderChart()}
               </div>
-
-              {/* Device Details */}
-              {showDeviceDetails && renderDeviceDetails()}
 
               {/* Statistics */}
               {renderStats()}
