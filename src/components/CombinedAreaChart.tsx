@@ -27,131 +27,39 @@ import {
   HardDrive
 } from 'lucide-react';
 import { useDeviceContext } from '../context/DeviceContext';
+import {
+  MinuteDataResponse,
+  HistoricalDataResponse,
+  MonthlyDataItem,
+  DailyDataItem,
+  YearlyDataItem,
+  LoginResponse,
+  DevicePoint,
+  DeviceDataResponse,
+  MinuteFormState,
+  DailyFormState,
+  MonthlyFormState,
+  YearlyFormState,
+  DateTimeState,
+  DailyDateRangeState,
+  MonthRangeState,
+  YearRangeState,
+  ChartConfigState,
+  LoadingState,
+  ViewMode,
+  ChartType,
+  ParamConfig
+} from '../types/solarData';
 
-// Interfaces
-interface MinuteDataPoint {
-  time_stamp: string;
-  p5?: string;
-  p6?: string;
-  p18?: string;
-  p21?: string;
-  p24?: string;
-  pST001?: string;
-  [key: string]: string | undefined;
-}
-
-interface MinuteDataResponse {
-  req_serial_num: string;
-  result_code: string;
-  result_msg: string;
-  result_data: {
-    [ps_key: string]: MinuteDataPoint[];
-  };
-}
-
-interface HistoricalDataPoint {
-  [key: string]: string;
-  time_stamp: string;
-}
-
-interface HistoricalDataResponse {
-  req_serial_num: string;
-  result_code: string;
-  result_msg: string;
-  result_data: {
-    [ps_key: string]: {
-      [data_point: string]: HistoricalDataPoint[];
-    };
-  };
-}
-
-interface MonthlyDataItem {
-  month: string;
-  year: string;
-  monthNum: number;
+// Extended interface for daily data with cumulative fields
+interface ExtendedDailyDataItem extends Omit<DailyDataItem, 'value' | 'formattedValue'> {
   value: number;
   formattedValue: string;
-  rawValue: string;
-  monthName: string;
-  date: string;
-  shortDate: string;
-  kwhValue: number;
-}
-
-interface DailyDataItem {
-  date: string;
-  value: number;
-  formattedValue: string;
-  rawValue: string;
-  timestamp: string;
-  formattedDate: string;
-  dayOfWeek: string;
-  isToday?: boolean;
-}
-
-interface YearlyDataItem {
-  year: string;
-  value: number;
-  formattedValue: string;
-  rawValue: string;
-  kwhValue: number;
-  formattedYear: string;
-}
-
-interface LoginResponse {
-  result_code: string;
-  result_msg: string;
-  result_data: {
-    token: string;
-    user_name: string;
-    email: string;
-    [key: string]: any;
-  } | null;
-}
-
-interface DevicePoint {
-  ps_key: string;
-  uuid: number;
-  p1: string | null;
-  p2: string | null;
-  p4: string | null;
-  p5: string | null;
-  p6: string | null;
-  p14: string | null;
-  p15: string | null;
-  p16: string | null;
-  p17: string | null;
-  p18: string | null;
-  p19: string | null;
-  p20: string | null;
-  p21: string | null;
-  p22: string | null;
-  p23: string | null;
-  p24: string | null;
-  p25: string | null;
-  p26: string | null;
-  p27: string | null;
-  p43: string | null;
-  p87: string | null;
-  p88: string | null;
-  device_name: string;
-  device_sn: string;
-  dev_status: number;
-  dev_fault_status: number;
-  device_time: string;
-  communication_dev_sn: string;
-}
-
-interface DeviceDataResponse {
-  req_serial_num: string;
-  result_code: string;
-  result_msg: string;
-  result_data: {
-    fail_sn_list: any[];
-    device_point_list: Array<{
-      device_point: DevicePoint;
-    }>;
-  };
+  dailyKwh?: number;
+  cumulativeKwh?: number;
+  formattedCumulativeKwh?: string;
+  growth?: string;
+  isEnergyParameter?: boolean;
 }
 
 const CombinedAreaChart: React.FC = () => {
@@ -345,6 +253,7 @@ const CombinedAreaChart: React.FC = () => {
       endDate: today
     });
 
+    // Set daily form dates
     setDailyForm(prev => ({
       ...prev,
       start_date: formatDateForAPI(new Date(sevenDaysAgoDate), '1'),
@@ -899,8 +808,8 @@ const CombinedAreaChart: React.FC = () => {
     });
   };
 
-  // Format daily data for chart
-  const formatDailyData = (): DailyDataItem[] => {
+  // UPDATED: Format daily data for chart - APPLIED CUMULATIVE LOGIC
+  const formatDailyData = (): ExtendedDailyDataItem[] => {
     if (!dailyData || !dailyData.result_data) {
       console.log('No daily data available');
       return [];
@@ -920,38 +829,90 @@ const CombinedAreaChart: React.FC = () => {
       return [];
     }
     
+    // First, sort the data by date to ensure chronological order
+    const sortedData = [...dataArray].sort((a, b) => {
+      const aDate = a.time_stamp;
+      const bDate = b.time_stamp;
+      if (aDate < bDate) return -1;
+      if (aDate > bDate) return 1;
+      return 0;
+    });
+
     const today = new Date().toISOString().split('T')[0];
-    
-    return dataArray.map(item => {
+    let previousCumulativeKwh = 0; // Track previous cumulative in kWh
+    const result: ExtendedDailyDataItem[] = [];
+
+    sortedData.forEach((item, index) => {
       const timestamp = item.time_stamp;
       const formattedDate = formatDateFromAPI(timestamp, '1');
       const date = new Date(formattedDate);
       const dayOfWeek = date.getDay();
       const valueKey = Object.keys(item).find(key => key !== 'time_stamp');
-      const value = valueKey ? parseFloat(item[valueKey]) : 0;
       
-      const formattedItem: DailyDataItem = {
+      if (!valueKey) return;
+
+      // Get the raw value from API
+      const rawValue = item[valueKey];
+      
+      // STEP 1: Convert from Wh to kWh by dividing by 1000 (for energy data points like p2, p87)
+      // Check if this is an energy parameter (p2, p87, etc.)
+      const isEnergyParam = ['p2', 'p87'].includes(dailyForm.data_point);
+      const dailyValue = parseFloat(rawValue);
+      const dailyValueKwh = isEnergyParam ? dailyValue / 1000 : dailyValue;
+      
+      // STEP 2: For energy parameters, calculate cumulative energy
+      let cumulativeKwh = 0;
+      let formattedCumulative = '';
+      
+      if (isEnergyParam) {
+        // Cumulative kWh = previous cumulative + current daily value in kWh
+        cumulativeKwh = previousCumulativeKwh + dailyValueKwh;
+        formattedCumulative = cumulativeKwh.toLocaleString(undefined, {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2
+        });
+        previousCumulativeKwh = cumulativeKwh; // Update for next iteration
+      }
+      
+      // Calculate growth percentage based on daily values
+      let growth = '';
+      if (index > 0 && result[index - 1].value > 0) {
+        const previousValue = result[index - 1].value;
+        const growthPercentage = ((dailyValueKwh - previousValue) / previousValue) * 100;
+        growth = growthPercentage.toFixed(1);
+      }
+
+      // Create the data item
+      const dataItem: ExtendedDailyDataItem = {
         date: formattedDate,
-        value,
-        formattedValue: value.toLocaleString(undefined, {
+        value: dailyValueKwh,
+        formattedValue: dailyValueKwh.toLocaleString(undefined, {
           minimumFractionDigits: 2,
           maximumFractionDigits: 2
         }),
-        rawValue: item[valueKey || ''],
+        rawValue,
         timestamp,
         formattedDate: `${shortDayNames[dayOfWeek]} ${formattedDate.split('-')[2]}`,
         dayOfWeek: dayNames[dayOfWeek],
-        isToday: formattedDate === today
+        isToday: formattedDate === today,
+        growth,
+        // New cumulative fields
+        dailyKwh: dailyValueKwh,
+        cumulativeKwh: cumulativeKwh,
+        formattedCumulativeKwh: formattedCumulative,
+        isEnergyParameter: isEnergyParam
       };
       
-      return formattedItem;
-    }).sort((a, b) => {
-      // Sort by date
+      result.push(dataItem);
+    });
+
+    // Sort by date
+    return result.sort((a, b) => {
       return new Date(a.date).getTime() - new Date(b.date).getTime();
     });
   };
 
-  // Format monthly data for chart
+  // UPDATED: Format monthly data for chart - APPLIED CUMULATIVE AND Wh TO kWh LOGIC
   const formatMonthlyData = (): MonthlyDataItem[] => {
     if (!monthlyData || !monthlyData.result_data) return [];
     
@@ -961,35 +922,83 @@ const CombinedAreaChart: React.FC = () => {
     const dataPoint = Object.keys(monthlyData.result_data[psKey])[0];
     const dataArray = monthlyData.result_data[psKey][dataPoint];
     
-    return dataArray.map(item => {
+    if (!dataArray || dataArray.length === 0) return [];
+
+    // First, sort the data by timestamp to ensure chronological order
+    const sortedData = [...dataArray].sort((a, b) => {
+      const aDate = a.time_stamp;
+      const bDate = b.time_stamp;
+      if (aDate < bDate) return -1;
+      if (aDate > bDate) return 1;
+      return 0;
+    });
+
+    const result: MonthlyDataItem[] = [];
+    let previousCumulativeKwh = 0; // Track previous cumulative in kWh
+
+    sortedData.forEach((item, index) => {
       const timestamp = item.time_stamp;
       const year = timestamp.slice(0, 4);
       const monthNum = parseInt(timestamp.slice(4, 6));
       const valueKey = Object.keys(item).find(key => key !== 'time_stamp');
-      const value = valueKey ? parseFloat(item[valueKey]) : 0;
+
+      if (!valueKey) return;
+
+      // Get the raw cumulative value from API (in Wh)
+      const cumulativeValueWh = parseFloat(item[valueKey]);
       
-      return {
+      // STEP 1: Convert from Wh to kWh by dividing by 1000
+      const cumulativeValueKwh = cumulativeValueWh / 1000;
+
+      // STEP 2: Calculate monthly production in kWh:
+      // Monthly kWh = Current Cumulative kWh - Previous Cumulative kWh
+      const monthlyKwh = cumulativeValueKwh - previousCumulativeKwh;
+
+      // Calculate growth percentage based on monthly kWh values
+      let growth = '';
+      if (index > 0 && result[index - 1].monthlyKwh > 0) {
+        const previousMonthlyKwh = result[index - 1].monthlyKwh;
+        const growthPercentage = ((monthlyKwh - previousMonthlyKwh) / previousMonthlyKwh) * 100;
+        growth = growthPercentage.toFixed(1);
+      }
+
+      // Create the data item
+      const dataItem: MonthlyDataItem = {
         month: timestamp,
         year,
         monthNum,
-        value,
-        formattedValue: value.toLocaleString(undefined, {
+        monthlyKwh: monthlyKwh,
+        cumulativeKwh: cumulativeValueKwh,
+        formattedMonthlyKwh: monthlyKwh.toLocaleString(undefined, {
           minimumFractionDigits: 2,
           maximumFractionDigits: 2
         }),
-        rawValue: item[valueKey || ''],
+        rawValue: item[valueKey],
         monthName: monthNames[monthNum - 1],
         date: `${shortMonthNames[monthNum - 1]} ${year}`,
         shortDate: `${shortMonthNames[monthNum - 1]} '${year.slice(2)}`,
-        kwhValue: value / 1000
+        growth,
+        // For backward compatibility
+        value: monthlyKwh,
+        kwhValue: monthlyKwh,
+        formattedValue: monthlyKwh.toLocaleString(undefined, {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2
+        })
       };
-    }).sort((a, b) => {
+
+      result.push(dataItem);
+      previousCumulativeKwh = cumulativeValueKwh; // Update for next iteration
+    });
+
+    // Sort by year and month
+    return result.sort((a, b) => {
       if (a.year !== b.year) return parseInt(a.year) - parseInt(b.year);
       return a.monthNum - b.monthNum;
     });
   };
 
-  // Format yearly data for chart
+  // UPDATED: Format yearly data for chart - APPLIED CUMULATIVE AND Wh TO kWh LOGIC
   const formatYearlyData = (): YearlyDataItem[] => {
     if (!yearlyData || !yearlyData.result_data) return [];
     
@@ -999,25 +1008,68 @@ const CombinedAreaChart: React.FC = () => {
     const dataPoint = Object.keys(yearlyData.result_data[psKey])[0];
     const dataArray = yearlyData.result_data[psKey][dataPoint];
     
-    return dataArray.map(item => {
+    if (!dataArray || dataArray.length === 0) return [];
+
+    // First, sort the data by year to ensure chronological order
+    const sortedData = [...dataArray].sort((a, b) => {
+      const aYear = parseInt(a.time_stamp);
+      const bYear = parseInt(b.time_stamp);
+      return aYear - bYear;
+    });
+
+    const result: YearlyDataItem[] = [];
+    let previousCumulativeKwh = 0; // Track previous cumulative in kWh
+
+    sortedData.forEach((item, index) => {
       const year = item.time_stamp;
       const valueKey = Object.keys(item).find(key => key !== 'time_stamp');
-      const value = valueKey ? parseFloat(item[valueKey]) : 0;
+
+      if (!valueKey) return;
+
+      // Get the raw cumulative value from API (in Wh)
+      const cumulativeValueWh = parseFloat(item[valueKey]);
       
-      return {
+      // STEP 1: Convert from Wh to kWh by dividing by 1000
+      const cumulativeValueKwh = cumulativeValueWh / 1000;
+
+      // STEP 2: Calculate yearly production in kWh:
+      // Yearly kWh = Current Cumulative kWh - Previous Cumulative kWh
+      const yearlyKwh = cumulativeValueKwh - previousCumulativeKwh;
+
+      // Calculate growth percentage based on yearly kWh values
+      let growth = '';
+      if (index > 0 && result[index - 1].monthlyKwh > 0) {
+        const previousYearlyKwh = result[index - 1].monthlyKwh;
+        const growthPercentage = ((yearlyKwh - previousYearlyKwh) / previousYearlyKwh) * 100;
+        growth = growthPercentage.toFixed(1);
+      }
+
+      // Create the data item
+      const dataItem: YearlyDataItem = {
         year,
-        value,
-        formattedValue: value.toLocaleString(undefined, {
+        monthlyKwh: yearlyKwh, // This is actually yearly total, keeping name for consistency
+        cumulativeKwh: cumulativeValueKwh,
+        formattedMonthlyKwh: yearlyKwh.toLocaleString(undefined, {
           minimumFractionDigits: 2,
           maximumFractionDigits: 2
         }),
-        rawValue: item[valueKey || ''],
-        kwhValue: value / 1000,
-        formattedYear: year
+        rawValue: item[valueKey],
+        growth,
+        formattedYear: year,
+        // For backward compatibility
+        value: yearlyKwh,
+        kwhValue: yearlyKwh,
+        formattedValue: yearlyKwh.toLocaleString(undefined, {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2
+        })
       };
-    }).sort((a, b) => {
-      return parseInt(a.year) - parseInt(b.year);
+
+      result.push(dataItem);
+      previousCumulativeKwh = cumulativeValueKwh; // Update for next iteration
     });
+
+    return result.sort((a, b) => parseInt(a.year) - parseInt(b.year));
   };
 
   // Get parameter configuration
@@ -1028,11 +1080,11 @@ const CombinedAreaChart: React.FC = () => {
       p18: { label: 'Grid Voltage', unit: 'V', icon: Gauge, color: '#ffc658', gradient: '#ffc65822' },
       p21: { label: 'Output Current', unit: 'A', icon: Wind, color: '#ff7300', gradient: '#ff730022' },
       p24: { label: 'Output Power', unit: 'W', icon: Battery, color: '#0088fe', gradient: '#0088fe22' },
-      p2: { label: 'Total Energy', unit: 'Wh', icon: Battery, color: '#10B981', gradient: '#10B98122' },
+      p2: { label: 'Total Energy', unit: 'kWh', icon: Battery, color: '#10B981', gradient: '#10B98122' },
       p1: { label: 'Total Power', unit: 'W', icon: Zap, color: '#3B82F6', gradient: '#3B82F622' },
       p25: { label: 'Temperature', unit: '°C', icon: Thermometer, color: '#EC4899', gradient: '#EC489922' },
       p14: { label: 'Grid Voltage', unit: 'V', icon: Gauge, color: '#9C27B0', gradient: '#9C27B022' },
-      p87: { label: 'Today Energy', unit: 'Wh', icon: Sun, color: '#FF9800', gradient: '#FF980022' }
+      p87: { label: 'Today Energy', unit: 'kWh', icon: Sun, color: '#FF9800', gradient: '#FF980022' }
     };
     
     return configs[param as keyof typeof configs] || { 
@@ -1044,7 +1096,7 @@ const CombinedAreaChart: React.FC = () => {
     };
   };
 
-  // Calculate statistics
+  // UPDATED: Calculate statistics - APPLIED CUMULATIVE AND Wh TO kWh LOGIC
   const calculateStats = () => {
     if (viewMode === 'minute') {
       const data = formatMinuteData();
@@ -1076,6 +1128,11 @@ const CombinedAreaChart: React.FC = () => {
       const maxItem = data.find(d => d.value === max);
       const minItem = data.find(d => d.value === min);
       
+      // Get cumulative total if it's an energy parameter
+      const totalCumulativeKwh = data.length > 0 && data[0].isEnergyParameter 
+        ? data[data.length - 1].cumulativeKwh || 0 
+        : 0;
+      
       return {
         max,
         min,
@@ -1084,56 +1141,103 @@ const CombinedAreaChart: React.FC = () => {
         count: values.length,
         maxDate: maxItem ? maxItem.date : '',
         minDate: minItem ? minItem.date : '',
+        totalCumulativeKwh,
         unit: getParamConfig(dailyForm.data_point).unit
       };
     } else if (viewMode === 'monthly') {
       const data = formatMonthlyData();
       if (data.length === 0) return null;
-      
-      const values = data.map(d => d.value);
-      const sum = values.reduce((a, b) => a + b, 0);
-      const avg = sum / values.length;
-      const max = Math.max(...values);
-      const min = Math.min(...values);
-      const maxItem = data.find(d => d.value === max);
-      const minItem = data.find(d => d.value === min);
-      
+
+      const monthlyKwhValues = data.map(d => d.monthlyKwh);
+      const sum = monthlyKwhValues.reduce((a, b) => a + b, 0);
+      const avg = sum / monthlyKwhValues.length;
+      const max = Math.max(...monthlyKwhValues);
+      const min = Math.min(...monthlyKwhValues);
+      const maxMonth = data.find(d => d.monthlyKwh === max);
+      const minMonth = data.find(d => d.monthlyKwh === min);
+
+      // Calculate monthly growth based on kWh production (last vs second last)
+      let monthlyGrowth = 0;
+      if (data.length > 1) {
+        const lastMonthValue = data[data.length - 1].monthlyKwh;
+        const secondLastMonthValue = data[data.length - 2].monthlyKwh;
+        monthlyGrowth = secondLastMonthValue > 0
+          ? ((lastMonthValue - secondLastMonthValue) / secondLastMonthValue * 100)
+          : 0;
+      }
+
+      // Calculate trend line (simple linear regression) on kWh production
+      let trendSlope = 0;
+      if (data.length > 1) {
+        const xValues = data.map((_, i) => i);
+        const yValues = data.map(d => d.monthlyKwh);
+        const n = xValues.length;
+
+        const sumX = xValues.reduce((a, b) => a + b, 0);
+        const sumY = yValues.reduce((a, b) => a + b, 0);
+        const sumXY = xValues.reduce((sum, x, i) => sum + x * yValues[i], 0);
+        const sumXX = xValues.reduce((sum, x) => sum + x * x, 0);
+
+        trendSlope = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX);
+      }
+
+      // Get cumulative totals in kWh
+      const totalCumulativeKwh = data.length > 0 ? data[data.length - 1].cumulativeKwh : 0;
+
       return {
+        sum,
+        avg,
         max,
         min,
-        avg,
-        sum,
-        count: values.length,
-        maxMonth: maxItem ? `${maxItem.monthName} ${maxItem.year}` : '',
-        minMonth: minItem ? `${minItem.monthName} ${minItem.year}` : '',
+        maxMonth: maxMonth ? `${maxMonth.monthName} ${maxMonth.year}` : '',
+        minMonth: minMonth ? `${minMonth.monthName} ${minMonth.year}` : '',
+        count: monthlyKwhValues.length,
+        monthlyGrowth: monthlyGrowth.toFixed(1),
+        trendSlope: (trendSlope * 100).toFixed(2),
+        totalCumulativeKwh,
         unit: getParamConfig(monthlyForm.data_point).unit
       };
     } else {
       const data = formatYearlyData();
       if (data.length === 0) return null;
-      
-      const values = data.map(d => d.value);
-      const sum = values.reduce((a, b) => a + b, 0);
-      const avg = sum / values.length;
-      const max = Math.max(...values);
-      const min = Math.min(...values);
-      const maxItem = data.find(d => d.value === max);
-      const minItem = data.find(d => d.value === min);
-      
+
+      const yearlyKwhValues = data.map(d => d.monthlyKwh); // This is yearly total kWh
+      const sum = yearlyKwhValues.reduce((a, b) => a + b, 0);
+      const avg = sum / yearlyKwhValues.length;
+      const max = Math.max(...yearlyKwhValues);
+      const min = Math.min(...yearlyKwhValues);
+      const maxYearItem = data.find(d => d.monthlyKwh === max);
+      const minYearItem = data.find(d => d.monthlyKwh === min);
+
+      // Calculate yearly growth based on kWh production (last vs second last)
+      let yearlyGrowth = 0;
+      if (data.length > 1) {
+        const lastYearValue = data[data.length - 1].monthlyKwh;
+        const secondLastYearValue = data[data.length - 2].monthlyKwh;
+        yearlyGrowth = secondLastYearValue > 0
+          ? ((lastYearValue - secondLastYearValue) / secondLastYearValue * 100)
+          : 0;
+      }
+
+      // Get cumulative totals in kWh
+      const totalCumulativeKwh = data.length > 0 ? data[data.length - 1].cumulativeKwh : 0;
+
       return {
+        sum,
+        avg,
         max,
         min,
-        avg,
-        sum,
-        count: values.length,
-        maxYear: maxItem ? maxItem.year : '',
-        minYear: minItem ? minItem.year : '',
+        maxYear: maxYearItem ? maxYearItem.year : '',
+        minYear: minYearItem ? minYearItem.year : '',
+        count: yearlyKwhValues.length,
+        yearlyGrowth: yearlyGrowth.toFixed(1),
+        totalCumulativeKwh,
         unit: getParamConfig(yearlyForm.data_point).unit
       };
     }
   };
 
-  // Export data
+  // UPDATED: Export data - APPLIED CUMULATIVE AND Wh TO kWh LOGIC
   const exportData = () => {
     if (viewMode === 'minute') {
       const data = formatMinuteData();
@@ -1164,10 +1268,32 @@ const CombinedAreaChart: React.FC = () => {
         return;
       }
       
-      const headers = ['Date', 'Day', 'Value', 'Raw Value'];
+      const isEnergy = data[0]?.isEnergyParameter || false;
+      const headers = isEnergy 
+        ? ['Date', 'Day', 'Daily Production (kWh)', 'Cumulative Energy (kWh)', 'Growth %', 'Raw Value (Wh)']
+        : ['Date', 'Day', 'Value', 'Raw Value'];
+      
       const csvContent = [
         headers.join(','),
-        ...data.map(row => `${row.date},${row.dayOfWeek},${row.value},${row.rawValue}`)
+        ...data.map(row => {
+          if (isEnergy) {
+            return [
+              row.date,
+              row.dayOfWeek,
+              row.dailyKwh?.toFixed(2) || '0',
+              row.cumulativeKwh?.toFixed(2) || '0',
+              row.growth ? `${row.growth}%` : '0%',
+              row.rawValue
+            ].join(',');
+          } else {
+            return [
+              row.date,
+              row.dayOfWeek,
+              row.value,
+              row.rawValue
+            ].join(',');
+          }
+        })
       ].join('\n');
       
       const blob = new Blob([csvContent], { type: 'text/csv' });
@@ -1183,17 +1309,26 @@ const CombinedAreaChart: React.FC = () => {
         return;
       }
       
-      const headers = ['Year', 'Month', 'Energy (Wh)', 'Energy (kWh)', 'Raw Value'];
+      const headers = ['Year', 'Month', 'Monthly Production (kWh)', 'Cumulative Energy (kWh)', 'Growth %', 'Raw Value (Wh)'];
       const csvContent = [
         headers.join(','),
-        ...data.map(row => `${row.year},${row.monthName},${row.value},${row.kwhValue.toFixed(2)},${row.rawValue}`)
+        ...data.map(row => {
+          return [
+            row.year,
+            row.monthName,
+            row.monthlyKwh.toFixed(2),
+            row.cumulativeKwh.toFixed(2),
+            row.growth ? `${row.growth}%` : '0%',
+            row.rawValue
+          ].join(',');
+        })
       ].join('\n');
       
       const blob = new Blob([csvContent], { type: 'text/csv' });
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `monthly-data-${new Date().toISOString().split('T')[0]}.csv`;
+      a.download = `monthly-energy-data-${new Date().toISOString().split('T')[0]}.csv`;
       a.click();
     } else {
       const data = formatYearlyData();
@@ -1202,17 +1337,25 @@ const CombinedAreaChart: React.FC = () => {
         return;
       }
       
-      const headers = ['Year', 'Energy (Wh)', 'Energy (kWh)', 'Raw Value'];
+      const headers = ['Year', 'Yearly Production (kWh)', 'Cumulative Energy (kWh)', 'Growth %', 'Raw Value (Wh)'];
       const csvContent = [
         headers.join(','),
-        ...data.map(row => `${row.year},${row.value},${row.kwhValue.toFixed(2)},${row.rawValue}`)
+        ...data.map(row => {
+          return [
+            row.year,
+            row.monthlyKwh.toFixed(2),
+            row.cumulativeKwh.toFixed(2),
+            row.growth ? `${row.growth}%` : '0%',
+            row.rawValue
+          ].join(',');
+        })
       ].join('\n');
       
       const blob = new Blob([csvContent], { type: 'text/csv' });
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `yearly-data-${new Date().toISOString().split('T')[0]}.csv`;
+      a.download = `yearly-energy-data-${new Date().toISOString().split('T')[0]}.csv`;
       a.click();
     }
   };
@@ -1367,7 +1510,7 @@ const CombinedAreaChart: React.FC = () => {
     }
   };
 
-  // Render chart based on view mode
+  // UPDATED: Render chart based on view mode - APPLIED CUMULATIVE AND Wh TO kWh LOGIC
   const renderChart = () => {
     let data: any[] = [];
     let paramConfig: any = {};
@@ -1408,23 +1551,28 @@ const CombinedAreaChart: React.FC = () => {
     // Prepare chart data based on view mode
     let chartData = data;
     if (viewMode === 'daily') {
-      chartData = data.map((item: DailyDataItem) => ({
+      chartData = data.map((item: ExtendedDailyDataItem) => ({
         ...item,
         name: item.formattedDate,
-        value: item.value
+        value: item.value,
+        cumulative: item.cumulativeKwh,
+        growth: item.growth,
+        isEnergyParameter: item.isEnergyParameter
       }));
     } else if (viewMode === 'monthly') {
       chartData = data.map((item: MonthlyDataItem) => ({
         ...item,
         name: item.shortDate,
-        value: item.value,
+        value: item.monthlyKwh, // Use monthlyKwh for chart
+        cumulative: item.cumulativeKwh,
         monthIndex: parseInt(item.year) * 12 + item.monthNum
       })).sort((a: any, b: any) => a.monthIndex - b.monthIndex);
     } else if (viewMode === 'yearly') {
       chartData = data.map((item: YearlyDataItem) => ({
         ...item,
         name: item.year,
-        value: item.value
+        value: item.monthlyKwh, // Use monthlyKwh (yearly total) for chart
+        cumulative: item.cumulativeKwh
       }));
     }
 
@@ -1482,12 +1630,60 @@ const CombinedAreaChart: React.FC = () => {
                     borderRadius: '8px',
                     boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)'
                   }}
-                  formatter={(value: number) => [
-                    <span key="value" className="font-semibold">
-                      {value.toLocaleString(undefined, { maximumFractionDigits: 2 })} {paramConfig.unit}
-                    </span>,
-                    paramConfig.label
-                  ]}
+                  formatter={(value: number, name: string, props: any) => {
+                    if (viewMode === 'daily' && props.payload?.isEnergyParameter) {
+                      const payload = props.payload;
+                      return [
+                        <>
+                          <div className="space-y-1">
+                            <p className="font-semibold text-gray-900">
+                              {value.toLocaleString(undefined, { maximumFractionDigits: 2 })} {paramConfig.unit}
+                            </p>
+                            {payload.cumulative && (
+                              <p className="text-sm text-blue-600">
+                                Cumulative: {payload.cumulative.toLocaleString(undefined, { maximumFractionDigits: 2 })} kWh
+                              </p>
+                            )}
+                            {payload.growth && parseFloat(payload.growth) !== 0 && (
+                              <p className={`text-sm ${parseFloat(payload.growth) > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                Growth: {parseFloat(payload.growth) > 0 ? '+' : ''}{payload.growth}%
+                              </p>
+                            )}
+                          </div>
+                        </>,
+                        name
+                      ];
+                    }
+                    if (viewMode === 'monthly' || viewMode === 'yearly') {
+                      const payload = props.payload;
+                      return [
+                        <>
+                          <div className="space-y-1">
+                            <p className="font-semibold text-gray-900">
+                              {value.toLocaleString(undefined, { maximumFractionDigits: 2 })} {paramConfig.unit}
+                            </p>
+                            {payload.cumulative && (
+                              <p className="text-sm text-blue-600">
+                                Cumulative: {payload.cumulative.toLocaleString(undefined, { maximumFractionDigits: 2 })} kWh
+                              </p>
+                            )}
+                            {payload.growth && parseFloat(payload.growth) !== 0 && (
+                              <p className={`text-sm ${parseFloat(payload.growth) > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                Growth: {parseFloat(payload.growth) > 0 ? '+' : ''}{payload.growth}%
+                              </p>
+                            )}
+                          </div>
+                        </>,
+                        name
+                      ];
+                    }
+                    return [
+                      <span key="value" className="font-semibold">
+                        {value.toLocaleString(undefined, { maximumFractionDigits: 2 })} {paramConfig.unit}
+                      </span>,
+                      name
+                    ];
+                  }}
                   labelFormatter={(label) => {
                     if (viewMode === 'minute') {
                       const item = chartData.find((d: any) => d.time === label);
@@ -1496,7 +1692,8 @@ const CombinedAreaChart: React.FC = () => {
                       const item = chartData.find((d: any) => d.name === label);
                       return `Date: ${item?.date || label}`;
                     } else if (viewMode === 'monthly') {
-                      return `Month: ${label}`;
+                      const item = chartData.find((d: any) => d.name === label);
+                      return `Month: ${item?.monthName || label}`;
                     } else {
                       return `Year: ${label}`;
                     }
@@ -1549,12 +1746,60 @@ const CombinedAreaChart: React.FC = () => {
                     borderRadius: '8px',
                     boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)'
                   }}
-                  formatter={(value: number) => [
-                    <span key="value" className="font-semibold">
-                      {value.toLocaleString(undefined, { maximumFractionDigits: 2 })} {paramConfig.unit}
-                    </span>,
-                    paramConfig.label
-                  ]}
+                  formatter={(value: number, name: string, props: any) => {
+                    if (viewMode === 'daily' && props.payload?.isEnergyParameter) {
+                      const payload = props.payload;
+                      return [
+                        <>
+                          <div className="space-y-1">
+                            <p className="font-semibold text-gray-900">
+                              {value.toLocaleString(undefined, { maximumFractionDigits: 2 })} {paramConfig.unit}
+                            </p>
+                            {payload.cumulative && (
+                              <p className="text-sm text-blue-600">
+                                Cumulative: {payload.cumulative.toLocaleString(undefined, { maximumFractionDigits: 2 })} kWh
+                              </p>
+                            )}
+                            {payload.growth && parseFloat(payload.growth) !== 0 && (
+                              <p className={`text-sm ${parseFloat(payload.growth) > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                Growth: {parseFloat(payload.growth) > 0 ? '+' : ''}{payload.growth}%
+                              </p>
+                            )}
+                          </div>
+                        </>,
+                        name
+                      ];
+                    }
+                    if (viewMode === 'monthly' || viewMode === 'yearly') {
+                      const payload = props.payload;
+                      return [
+                        <>
+                          <div className="space-y-1">
+                            <p className="font-semibold text-gray-900">
+                              {value.toLocaleString(undefined, { maximumFractionDigits: 2 })} {paramConfig.unit}
+                            </p>
+                            {payload.cumulative && (
+                              <p className="text-sm text-blue-600">
+                                Cumulative: {payload.cumulative.toLocaleString(undefined, { maximumFractionDigits: 2 })} kWh
+                              </p>
+                            )}
+                            {payload.growth && parseFloat(payload.growth) !== 0 && (
+                              <p className={`text-sm ${parseFloat(payload.growth) > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                Growth: {parseFloat(payload.growth) > 0 ? '+' : ''}{payload.growth}%
+                              </p>
+                            )}
+                          </div>
+                        </>,
+                        name
+                      ];
+                    }
+                    return [
+                      <span key="value" className="font-semibold">
+                        {value.toLocaleString(undefined, { maximumFractionDigits: 2 })} {paramConfig.unit}
+                      </span>,
+                      name
+                    ];
+                  }}
                   labelFormatter={(label) => {
                     if (viewMode === 'minute') {
                       const item = chartData.find((d: any) => d.time === label);
@@ -1563,7 +1808,8 @@ const CombinedAreaChart: React.FC = () => {
                       const item = chartData.find((d: any) => d.name === label);
                       return `Date: ${item?.date || label}`;
                     } else if (viewMode === 'monthly') {
-                      return `Month: ${label}`;
+                      const item = chartData.find((d: any) => d.name === label);
+                      return `Month: ${item?.monthName || label}`;
                     } else {
                       return `Year: ${label}`;
                     }
@@ -1622,12 +1868,60 @@ const CombinedAreaChart: React.FC = () => {
                     borderRadius: '8px',
                     boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)'
                   }}
-                  formatter={(value: number) => [
-                    <span key="value" className="font-semibold">
-                      {value.toLocaleString(undefined, { maximumFractionDigits: 2 })} {paramConfig.unit}
-                    </span>,
-                    paramConfig.label
-                  ]}
+                  formatter={(value: number, name: string, props: any) => {
+                    if (viewMode === 'daily' && props.payload?.isEnergyParameter) {
+                      const payload = props.payload;
+                      return [
+                        <>
+                          <div className="space-y-1">
+                            <p className="font-semibold text-gray-900">
+                              {value.toLocaleString(undefined, { maximumFractionDigits: 2 })} {paramConfig.unit}
+                            </p>
+                            {payload.cumulative && (
+                              <p className="text-sm text-blue-600">
+                                Cumulative: {payload.cumulative.toLocaleString(undefined, { maximumFractionDigits: 2 })} kWh
+                              </p>
+                            )}
+                            {payload.growth && parseFloat(payload.growth) !== 0 && (
+                              <p className={`text-sm ${parseFloat(payload.growth) > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                Growth: {parseFloat(payload.growth) > 0 ? '+' : ''}{payload.growth}%
+                              </p>
+                            )}
+                          </div>
+                        </>,
+                        name
+                      ];
+                    }
+                    if (viewMode === 'monthly' || viewMode === 'yearly') {
+                      const payload = props.payload;
+                      return [
+                        <>
+                          <div className="space-y-1">
+                            <p className="font-semibold text-gray-900">
+                              {value.toLocaleString(undefined, { maximumFractionDigits: 2 })} {paramConfig.unit}
+                            </p>
+                            {payload.cumulative && (
+                              <p className="text-sm text-blue-600">
+                                Cumulative: {payload.cumulative.toLocaleString(undefined, { maximumFractionDigits: 2 })} kWh
+                              </p>
+                            )}
+                            {payload.growth && parseFloat(payload.growth) !== 0 && (
+                              <p className={`text-sm ${parseFloat(payload.growth) > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                Growth: {parseFloat(payload.growth) > 0 ? '+' : ''}{payload.growth}%
+                              </p>
+                            )}
+                          </div>
+                        </>,
+                        name
+                      ];
+                    }
+                    return [
+                      <span key="value" className="font-semibold">
+                        {value.toLocaleString(undefined, { maximumFractionDigits: 2 })} {paramConfig.unit}
+                      </span>,
+                      name
+                    ];
+                  }}
                   labelFormatter={(label) => {
                     if (viewMode === 'minute') {
                       const item = chartData.find((d: any) => d.time === label);
@@ -1636,7 +1930,8 @@ const CombinedAreaChart: React.FC = () => {
                       const item = chartData.find((d: any) => d.name === label);
                       return `Date: ${item?.date || label}`;
                     } else if (viewMode === 'monthly') {
-                      return `Month: ${label}`;
+                      const item = chartData.find((d: any) => d.name === label);
+                      return `Month: ${item?.monthName || label}`;
                     } else {
                       return `Year: ${label}`;
                     }
@@ -1666,7 +1961,7 @@ const CombinedAreaChart: React.FC = () => {
     );
   };
 
-  // Render statistics
+  // UPDATED: Render statistics - APPLIED CUMULATIVE AND Wh TO kWh LOGIC
   const renderStats = () => {
     const stats = calculateStats();
     if (!stats) return null;
@@ -1682,6 +1977,141 @@ const CombinedAreaChart: React.FC = () => {
       paramConfig = getParamConfig(yearlyForm.data_point);
     }
 
+    // For monthly and yearly views, show cumulative total as well
+    if (viewMode === 'monthly' || viewMode === 'yearly') {
+      return (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6">
+          <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
+            <div className="flex items-center gap-2 mb-2">
+              <TrendingUp className="w-4 h-4 text-blue-500" />
+              <span className="text-sm text-gray-600">Maximum</span>
+            </div>
+            <p className="text-2xl font-bold text-gray-900">
+              {stats.max.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+            </p>
+            <p className="text-sm text-gray-500">{paramConfig.unit}</p>
+            {stats.maxMonth && (
+              <p className="text-xs text-gray-400 mt-1">{stats.maxMonth}</p>
+            )}
+            {stats.maxYear && (
+              <p className="text-xs text-gray-400 mt-1">{stats.maxYear}</p>
+            )}
+          </div>
+
+          <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
+            <div className="flex items-center gap-2 mb-2">
+              <TrendingUp className="w-4 h-4 text-red-500 transform rotate-180" />
+              <span className="text-sm text-gray-600">Minimum</span>
+            </div>
+            <p className="text-2xl font-bold text-gray-900">
+              {stats.min.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+            </p>
+            <p className="text-sm text-gray-500">{paramConfig.unit}</p>
+            {stats.minMonth && (
+              <p className="text-xs text-gray-400 mt-1">{stats.minMonth}</p>
+            )}
+            {stats.minYear && (
+              <p className="text-xs text-gray-400 mt-1">{stats.minYear}</p>
+            )}
+          </div>
+
+          <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
+            <div className="flex items-center gap-2 mb-2">
+              <Activity className="w-4 h-4 text-green-500" />
+              <span className="text-sm text-gray-600">Total Production</span>
+            </div>
+            <p className="text-2xl font-bold text-gray-900">
+              {stats.sum.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+            </p>
+            <p className="text-sm text-gray-500">{paramConfig.unit}</p>
+            {stats.totalCumulativeKwh && (
+              <p className="text-xs text-blue-600 mt-1">
+                Cumulative: {stats.totalCumulativeKwh.toFixed(2)} kWh
+              </p>
+            )}
+          </div>
+
+          <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
+            <div className="flex items-center gap-2 mb-2">
+              <Zap className="w-4 h-4 text-purple-500" />
+              <span className="text-sm text-gray-600">
+                {viewMode === 'monthly' ? 'Monthly Growth' : 'Yearly Growth'}
+              </span>
+            </div>
+            <p className={`text-2xl font-bold ${
+              parseFloat(viewMode === 'monthly' ? stats.monthlyGrowth : stats.yearlyGrowth || '0') > 0 
+                ? 'text-green-600' 
+                : 'text-red-600'
+            }`}>
+              {parseFloat(viewMode === 'monthly' ? stats.monthlyGrowth : stats.yearlyGrowth || '0') > 0 ? '+' : ''}
+              {(viewMode === 'monthly' ? stats.monthlyGrowth : stats.yearlyGrowth) || '0'}%
+            </p>
+            <p className="text-sm text-gray-500">
+              {viewMode === 'monthly' ? 'vs previous month' : 'vs previous year'}
+            </p>
+          </div>
+        </div>
+      );
+    }
+
+    // For daily view, show cumulative if it's an energy parameter
+    if (viewMode === 'daily' && stats.totalCumulativeKwh) {
+      return (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6">
+          <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
+            <div className="flex items-center gap-2 mb-2">
+              <TrendingUp className="w-4 h-4 text-blue-500" />
+              <span className="text-sm text-gray-600">Maximum</span>
+            </div>
+            <p className="text-2xl font-bold text-gray-900">
+              {stats.max.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+            </p>
+            <p className="text-sm text-gray-500">{paramConfig.unit}</p>
+            {stats.maxDate && (
+              <p className="text-xs text-gray-400 mt-1">{stats.maxDate}</p>
+            )}
+          </div>
+
+          <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
+            <div className="flex items-center gap-2 mb-2">
+              <TrendingUp className="w-4 h-4 text-red-500 transform rotate-180" />
+              <span className="text-sm text-gray-600">Minimum</span>
+            </div>
+            <p className="text-2xl font-bold text-gray-900">
+              {stats.min.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+            </p>
+            <p className="text-sm text-gray-500">{paramConfig.unit}</p>
+            {stats.minDate && (
+              <p className="text-xs text-gray-400 mt-1">{stats.minDate}</p>
+            )}
+          </div>
+
+          <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
+            <div className="flex items-center gap-2 mb-2">
+              <Activity className="w-4 h-4 text-green-500" />
+              <span className="text-sm text-gray-600">Average</span>
+            </div>
+            <p className="text-2xl font-bold text-gray-900">
+              {stats.avg.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+            </p>
+            <p className="text-sm text-gray-500">{paramConfig.unit}</p>
+          </div>
+
+          <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
+            <div className="flex items-center gap-2 mb-2">
+              <Activity className="w-4 h-4 text-green-500" />
+              <span className="text-sm text-gray-600">Total Cumulative</span>
+            </div>
+            <p className="text-2xl font-bold text-gray-900">
+              {stats.totalCumulativeKwh.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+            </p>
+            <p className="text-sm text-gray-500">kWh</p>
+          </div>
+        </div>
+      );
+    }
+
+    // For daily view with non-energy parameters or minute view
     return (
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6">
         <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
@@ -1774,88 +2204,8 @@ const CombinedAreaChart: React.FC = () => {
     if (!deviceData) return null;
 
     return (
-      <div className="mt-6 p-4 bg-gradient-to-r from-blue-50 to-blue-100 rounded-xl border border-blue-200">
-        <div className="flex items-center justify-between mb-4">
-          <h4 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-            <Cpu className="w-5 h-5 text-blue-600" />
-            Device Information
-          </h4>
-          <button
-            onClick={() => setShowDeviceDetails(false)}
-            className="text-gray-500 hover:text-gray-700"
-          >
-            ✕
-          </button>
-        </div>
-        
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          <div className="bg-white p-3 rounded-lg border border-gray-200">
-            <p className="text-sm text-gray-600">Device Name</p>
-            <p className="font-semibold text-gray-900">{deviceData.device_name}</p>
-          </div>
-          
-          <div className="bg-white p-3 rounded-lg border border-gray-200">
-            <p className="text-sm text-gray-600">Serial Number</p>
-            <p className="font-semibold text-gray-900">{deviceData.device_sn}</p>
-          </div>
-          
-          <div className="bg-white p-3 rounded-lg border border-gray-200">
-            <p className="text-sm text-gray-600">Communication SN</p>
-            <p className="font-semibold text-gray-900">{deviceData.communication_dev_sn}</p>
-          </div>
-          
-          <div className="bg-white p-3 rounded-lg border border-gray-200">
-            <p className="text-sm text-gray-600">Status</p>
-            <div className="flex items-center gap-2">
-              <div className={`w-2 h-2 rounded-full ${deviceData.dev_status === 1 ? 'bg-green-500' : 'bg-red-500'}`}></div>
-              <p className={`font-semibold ${deviceData.dev_status === 1 ? 'text-green-700' : 'text-red-700'}`}>
-                {deviceData.dev_status === 1 ? 'Normal' : 'Fault'}
-              </p>
-            </div>
-          </div>
-          
-          <div className="bg-white p-3 rounded-lg border border-gray-200">
-            <p className="text-sm text-gray-600">Device Time</p>
-            <p className="font-semibold text-gray-900">{deviceData.device_time}</p>
-          </div>
-          
-          <div className="bg-white p-3 rounded-lg border border-gray-200">
-            <p className="text-sm text-gray-600">PS Key</p>
-            <p className="font-semibold text-gray-900 font-mono">{deviceData.ps_key}</p>
-          </div>
-        </div>
-        
-        {/* Quick parameters */}
-        <div className="mt-4">
-          <h5 className="text-sm font-semibold text-gray-700 mb-2">Quick Parameters</h5>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-            {deviceData.p24 && (
-              <div className="bg-white p-2 rounded-lg border border-gray-200">
-                <p className="text-xs text-gray-600">Output Power</p>
-                <p className="font-semibold text-gray-900">{deviceData.p24} W</p>
-              </div>
-            )}
-            {deviceData.p2 && (
-              <div className="bg-white p-2 rounded-lg border border-gray-200">
-                <p className="text-xs text-gray-600">Total Energy</p>
-                <p className="font-semibold text-gray-900">{deviceData.p2} Wh</p>
-              </div>
-            )}
-            {deviceData.p87 && (
-              <div className="bg-white p-2 rounded-lg border border-gray-200">
-                <p className="text-xs text-gray-600">Today Energy</p>
-                <p className="font-semibold text-gray-900">{deviceData.p87} Wh</p>
-              </div>
-            )}
-            {deviceData.p25 && (
-              <div className="bg-white p-2 rounded-lg border border-gray-200">
-                <p className="text-xs text-gray-600">Temperature</p>
-                <p className="font-semibold text-gray-900">{deviceData.p25} °C</p>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
+      <div className=""></div>
+      
     );
   };
 
@@ -1870,9 +2220,16 @@ const CombinedAreaChart: React.FC = () => {
                 <h1 className="text-2xl md:text-3xl font-bold text-gray-900 flex items-center gap-3">
                   <ArrowUpDown className="w-8 h-8 text-blue-600" />
                   Combined Data Analytics
+                  {(viewMode === 'daily' || viewMode === 'monthly' || viewMode === 'yearly') && (
+                    <span className="text-sm bg-green-100 text-green-800 px-2 py-1 rounded-full">
+                      Wh→kWh then Calculate Production
+                    </span>
+                  )}
                 </h1>
                 <p className="text-gray-600 mt-2">
-                  Switch between minute, daily, monthly, and yearly area graphs with datetime selection
+                  {viewMode === 'daily' || viewMode === 'monthly' || viewMode === 'yearly' 
+                    ? 'API data in Wh → Convert to kWh (÷1000) → Production = Current Cumulative - Previous Cumulative'
+                    : 'Switch between minute, daily, monthly, and yearly area graphs with datetime selection'}
                 </p>
               </div>
               
@@ -1938,6 +2295,11 @@ const CombinedAreaChart: React.FC = () => {
                 >
                   <Sun className="w-5 h-5" />
                   Daily Data
+                  {viewMode === 'daily' && (
+                    <span className="text-xs bg-green-100 text-green-800 px-1 py-0.5 rounded">
+                      kWh Calc
+                    </span>
+                  )}
                 </button>
                 <button
                   onClick={() => setViewMode('monthly')}
@@ -1949,6 +2311,11 @@ const CombinedAreaChart: React.FC = () => {
                 >
                   <Calendar className="w-5 h-5" />
                   Monthly Data
+                  {viewMode === 'monthly' && (
+                    <span className="text-xs bg-green-100 text-green-800 px-1 py-0.5 rounded">
+                      kWh Calc
+                    </span>
+                  )}
                 </button>
                 <button
                   onClick={() => setViewMode('yearly')}
@@ -1960,6 +2327,11 @@ const CombinedAreaChart: React.FC = () => {
                 >
                   <CalendarDays className="w-5 h-5" />
                   Yearly Data
+                  {viewMode === 'yearly' && (
+                    <span className="text-xs bg-green-100 text-green-800 px-1 py-0.5 rounded">
+                      kWh Calc
+                    </span>
+                  )}
                 </button>
               </div>
             </div>
@@ -2237,32 +2609,7 @@ const CombinedAreaChart: React.FC = () => {
                       <label className="block text-sm font-medium text-gray-700 mb-2">
                         Quick Presets
                       </label>
-                      <div className="grid grid-cols-2 gap-2">
-                        <button
-                          onClick={() => applyMinutePreset('today')}
-                          className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition"
-                        >
-                          Today
-                        </button>
-                        <button
-                          onClick={() => applyMinutePreset('yesterday')}
-                          className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition"
-                        >
-                          Yesterday
-                        </button>
-                        <button
-                          onClick={() => applyMinutePreset('last2hours')}
-                          className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition"
-                        >
-                          Last 2 Hours
-                        </button>
-                        <button
-                          onClick={() => applyMinutePreset('last24hours')}
-                          className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition"
-                        >
-                          Last 24 Hours
-                        </button>
-                      </div>
+                     
                     </div>
                   </div>
                 ) : viewMode === 'daily' ? (
@@ -2301,15 +2648,20 @@ const CombinedAreaChart: React.FC = () => {
                         onChange={(e) => setDailyForm(prev => ({ ...prev, data_point: e.target.value }))}
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition"
                       >
-                        <option value="p2">Total Energy (p2)</option>
+                        <option value="p2">Total Energy (p2) - kWh Calculation</option>
                         <option value="p1">Total Power (p1)</option>
                         <option value="p24">Output Power (p24)</option>
                         <option value="p18">Grid Voltage (p18)</option>
                         <option value="p21">Output Current (p21)</option>
                         <option value="p25">Temperature (p25)</option>
-                        <option value="p87">Today Energy (p87)</option>
+                        <option value="p87">Today Energy (p87) - kWh Calculation</option>
                         <option value="p14">Grid Voltage (p14)</option>
                       </select>
+                      <p className="text-xs text-gray-500 mt-1">
+                        {['p2', 'p87'].includes(dailyForm.data_point) 
+                          ? 'Will calculate cumulative energy and growth' 
+                          : 'No cumulative calculation'}
+                      </p>
                     </div>
 
                     <div>
@@ -2449,7 +2801,7 @@ const CombinedAreaChart: React.FC = () => {
                         onChange={(e) => setMonthlyForm(prev => ({ ...prev, data_point: e.target.value }))}
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition"
                       >
-                        <option value="p2">Total Energy (p2)</option>
+                        <option value="p2">Total Energy (p2) - kWh Calculation</option>
                         <option value="p1">Total Power (p1)</option>
                         <option value="p24">Output Power (p24)</option>
                         <option value="p18">Grid Voltage (p18)</option>
@@ -2543,7 +2895,7 @@ const CombinedAreaChart: React.FC = () => {
                         onChange={(e) => setYearlyForm(prev => ({ ...prev, data_point: e.target.value }))}
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition"
                       >
-                        <option value="p2">Total Energy (p2)</option>
+                        <option value="p2">Total Energy (p2) - kWh Calculation</option>
                         <option value="p1">Total Power (p1)</option>
                         <option value="p24">Output Power (p24)</option>
                         <option value="p18">Grid Voltage (p18)</option>
@@ -2796,76 +3148,7 @@ const CombinedAreaChart: React.FC = () => {
 
             {/* Main Content Area */}
             <div className="lg:col-span-3 space-y-6">
-              {/* Chart Header */}
-              <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
-                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                  <div>
-                    <h2 className="text-xl font-bold text-gray-900 flex items-center gap-3">
-                      {viewMode === 'minute' ? (
-                        <>
-                          <Clock className="w-6 h-6 text-blue-600" />
-                          Minute Data Area Graph
-                        </>
-                      ) : viewMode === 'daily' ? (
-                        <>
-                          <Sun className="w-6 h-6 text-blue-600" />
-                          Daily Data Area Graph
-                        </>
-                      ) : viewMode === 'monthly' ? (
-                        <>
-                          <Calendar className="w-6 h-6 text-blue-600" />
-                          Monthly Data Area Graph
-                        </>
-                      ) : (
-                        <>
-                          <CalendarDays className="w-6 h-6 text-blue-600" />
-                          Yearly Data Area Graph
-                        </>
-                      )}
-                    </h2>
-                    <p className="text-gray-600 mt-1">
-                      {viewMode === 'minute' 
-                        ? `Showing ${minuteData ? formatMinuteData().length : 0} minute intervals` 
-                        : viewMode === 'daily'
-                        ? `Showing ${dailyData ? formatDailyData().length : 0} days of data`
-                        : viewMode === 'monthly'
-                        ? `Showing ${monthlyData ? formatMonthlyData().length : 0} months of data`
-                        : `Showing ${yearlyData ? formatYearlyData().length : 0} years of data`}
-                    </p>
-                  </div>
-                  
-                  <div className="flex items-center gap-3">
-                    <button
-                      onClick={() => setIsFullScreen(!isFullScreen)}
-                      className="px-4 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition flex items-center gap-2"
-                    >
-                      {isFullScreen ? (
-                        <>
-                          <Minimize2 className="w-4 h-4" />
-                          Exit Fullscreen
-                        </>
-                      ) : (
-                        <>
-                          <Maximize2 className="w-4 h-4" />
-                          Fullscreen
-                        </>
-                      )}
-                    </button>
-                    
-                    <button
-                      onClick={exportData}
-                      disabled={(viewMode === 'minute' && !minuteData) || 
-                               (viewMode === 'daily' && !dailyData) || 
-                               (viewMode === 'monthly' && !monthlyData) ||
-                               (viewMode === 'yearly' && !yearlyData)}
-                      className="px-4 py-2 text-sm bg-green-600 hover:bg-green-700 text-white rounded-lg transition flex items-center gap-2"
-                    >
-                      <Download className="w-4 h-4" />
-                      Export Data
-                    </button>
-                  </div>
-                </div>
-              </div>
+             
 
               {/* Chart */}
               <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5" ref={chartContainerRef}>
@@ -2905,25 +3188,44 @@ const CombinedAreaChart: React.FC = () => {
                               <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50">Output Current (A)</th>
                             </>
                           ) : viewMode === 'daily' ? (
-                            <>
-                              <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50">Date</th>
-                              <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50">Day</th>
-                              <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50">Value</th>
-                              <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50">Raw Value</th>
-                            </>
+                            (() => {
+                              const data = formatDailyData();
+                              const isEnergy = data[0]?.isEnergyParameter || false;
+                              return (
+                                <>
+                                  <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50">Date</th>
+                                  <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50">Day</th>
+                                  {isEnergy ? (
+                                    <>
+                                      <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50">Daily Production (kWh)</th>
+                                      <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50">Cumulative (kWh)</th>
+                                      <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50">Raw Value (Wh)</th>
+                                      <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50">Daily Growth</th>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50">Value</th>
+                                      <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50">Raw Value</th>
+                                    </>
+                                  )}
+                                </>
+                              );
+                            })()
                           ) : viewMode === 'monthly' ? (
                             <>
                               <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50">Month</th>
-                              <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50">Energy (Wh)</th>
-                              <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50">Energy (kWh)</th>
-                              <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50">Raw Value</th>
+                              <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50">Monthly Production (kWh)</th>
+                              <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50">Cumulative (kWh)</th>
+                              <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50">Raw API Value (Wh)</th>
+                              <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50">Monthly Growth</th>
                             </>
                           ) : (
                             <>
                               <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50">Year</th>
-                              <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50">Energy (Wh)</th>
-                              <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50">Energy (kWh)</th>
-                              <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50">Raw Value</th>
+                              <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50">Yearly Production (kWh)</th>
+                              <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50">Cumulative (kWh)</th>
+                              <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50">Raw API Value (Wh)</th>
+                              <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 bg-gray-50">Yearly Growth</th>
                             </>
                           )}
                         </tr>
@@ -2941,39 +3243,184 @@ const CombinedAreaChart: React.FC = () => {
                             </tr>
                           ))
                         ) : viewMode === 'daily' ? (
-                          formatDailyData().map((row, index) => (
-                            <tr key={index} className="border-b border-gray-100 hover:bg-gray-50">
-                              <td className="py-3 px-4">{row.date}</td>
-                              <td className="py-3 px-4">
-                                <div className="flex items-center gap-2">
-                                  <span>{row.dayOfWeek}</span>
-                                  {row.isToday && (
-                                    <span className="px-2 py-1 text-xs bg-green-100 text-green-800 rounded-full">
-                                      Today
-                                    </span>
-                                  )}
-                                </div>
-                              </td>
-                              <td className="py-3 px-4">{row.formattedValue}</td>
-                              <td className="py-3 px-4 font-mono text-sm">{row.rawValue}</td>
-                            </tr>
-                          ))
+                          (() => {
+                            const data = formatDailyData();
+                            const isEnergy = data[0]?.isEnergyParameter || false;
+                            
+                            return data.map((row, index) => (
+                              <tr key={index} className="border-b border-gray-100 hover:bg-gray-50">
+                                <td className="py-3 px-4">{row.date}</td>
+                                <td className="py-3 px-4">
+                                  <div className="flex items-center gap-2">
+                                    <span>{row.dayOfWeek}</span>
+                                    {row.isToday && (
+                                      <span className="px-2 py-1 text-xs bg-green-100 text-green-800 rounded-full">
+                                        Today
+                                      </span>
+                                    )}
+                                  </div>
+                                </td>
+                                {isEnergy ? (
+                                  <>
+                                    <td className="py-3 px-4">
+                                      <p className="font-bold text-gray-900">
+                                        {row.dailyKwh?.toFixed(2) || '0'}
+                                      </p>
+                                    </td>
+                                    <td className="py-3 px-4">
+                                      <p className="font-bold text-blue-700">
+                                        {row.cumulativeKwh?.toFixed(2) || '0'}
+                                      </p>
+                                    </td>
+                                    <td className="py-3 px-4 font-mono text-sm">{row.rawValue}</td>
+                                    <td className="py-3 px-4">
+                                      {row.growth && parseFloat(row.growth) !== 0 && (
+                                        <div className={`inline-flex items-center px-3 py-1 rounded-full text-sm ${
+                                          parseFloat(row.growth) > 0
+                                            ? 'bg-green-100 text-green-800'
+                                            : parseFloat(row.growth) < 0
+                                              ? 'bg-red-100 text-red-800'
+                                              : 'bg-gray-100 text-gray-800'
+                                        }`}>
+                                          <TrendingUp className={`w-4 h-4 mr-1 ${
+                                            parseFloat(row.growth) > 0 ? 'text-green-600' : 'text-red-600'
+                                          }`} />
+                                          {parseFloat(row.growth) > 0 ? '+' : ''}{row.growth}%
+                                        </div>
+                                      )}
+                                      {(!row.growth || parseFloat(row.growth) === 0) && (
+                                        <span className="text-sm text-gray-400">—</span>
+                                      )}
+                                    </td>
+                                  </>
+                                ) : (
+                                  <>
+                                    <td className="py-3 px-4">{row.formattedValue}</td>
+                                    <td className="py-3 px-4 font-mono text-sm">{row.rawValue}</td>
+                                  </>
+                                )}
+                              </tr>
+                            ));
+                          })()
                         ) : viewMode === 'monthly' ? (
                           formatMonthlyData().map((row, index) => (
                             <tr key={index} className="border-b border-gray-100 hover:bg-gray-50">
-                              <td className="py-3 px-4">{row.monthName} {row.year}</td>
-                              <td className="py-3 px-4">{row.formattedValue}</td>
-                              <td className="py-3 px-4">{row.kwhValue.toFixed(2)}</td>
-                              <td className="py-3 px-4 font-mono text-sm">{row.rawValue}</td>
+                              <td className="py-3 px-4">
+                                <div className="flex items-center gap-3">
+                                  <div className="w-10 h-10 rounded-lg bg-gradient-to-r from-blue-100 to-blue-200 flex items-center justify-center">
+                                    <span className="text-sm font-bold text-blue-600">
+                                      {shortMonthNames[row.monthNum - 1]}
+                                    </span>
+                                  </div>
+                                  <div>
+                                    <p className="font-semibold text-gray-900">{row.monthName}</p>
+                                    <p className="text-sm text-gray-500">{row.year}</p>
+                                  </div>
+                                </div>
+                              </td>
+                              <td className="py-3 px-4">
+                                <p className="font-bold text-gray-900 text-lg">
+                                  {row.formattedMonthlyKwh}
+                                </p>
+                                <p className="text-sm text-gray-500">
+                                  Monthly kWh
+                                </p>
+                              </td>
+                              <td className="py-3 px-4">
+                                <p className="font-bold text-blue-700 text-lg">
+                                  {row.cumulativeKwh.toFixed(2)}
+                                </p>
+                                <p className="text-sm text-gray-500">Cumulative kWh</p>
+                              </td>
+                              <td className="py-3 px-4">
+                                <div>
+                                  <p className="font-bold text-gray-700 text-sm">
+                                    {parseFloat(row.rawValue).toLocaleString()} Wh
+                                  </p>
+                                  <p className="text-xs text-gray-500">
+                                    API raw value
+                                  </p>
+                                </div>
+                              </td>
+                              <td className="py-3 px-4">
+                                {row.growth && parseFloat(row.growth) !== 0 && (
+                                  <div className={`inline-flex items-center px-3 py-1 rounded-full text-sm ${
+                                    parseFloat(row.growth) > 0
+                                      ? 'bg-green-100 text-green-800'
+                                      : parseFloat(row.growth) < 0
+                                        ? 'bg-red-100 text-red-800'
+                                        : 'bg-gray-100 text-gray-800'
+                                  }`}>
+                                    <TrendingUp className={`w-4 h-4 mr-1 ${
+                                      parseFloat(row.growth) > 0 ? 'text-green-600' : 'text-red-600'
+                                    }`} />
+                                    {parseFloat(row.growth) > 0 ? '+' : ''}{row.growth}%
+                                  </div>
+                                )}
+                                {(!row.growth || parseFloat(row.growth) === 0) && (
+                                  <span className="text-sm text-gray-400">—</span>
+                                )}
+                              </td>
                             </tr>
                           ))
                         ) : (
                           formatYearlyData().map((row, index) => (
                             <tr key={index} className="border-b border-gray-100 hover:bg-gray-50">
-                              <td className="py-3 px-4">{row.year}</td>
-                              <td className="py-3 px-4">{row.formattedValue}</td>
-                              <td className="py-3 px-4">{row.kwhValue.toFixed(2)}</td>
-                              <td className="py-3 px-4 font-mono text-sm">{row.rawValue}</td>
+                              <td className="py-3 px-4">
+                                <div className="flex items-center gap-3">
+                                  <div className="w-10 h-10 rounded-lg bg-gradient-to-r from-blue-100 to-blue-200 flex items-center justify-center">
+                                    <span className="text-sm font-bold text-blue-600">
+                                      {row.year}
+                                    </span>
+                                  </div>
+                                  <div>
+                                    <p className="font-semibold text-gray-900">Year {row.year}</p>
+                                  </div>
+                                </div>
+                              </td>
+                              <td className="py-3 px-4">
+                                <p className="font-bold text-gray-900 text-lg">
+                                  {row.formattedMonthlyKwh}
+                                </p>
+                                <p className="text-sm text-gray-500">
+                                  Yearly kWh
+                                </p>
+                              </td>
+                              <td className="py-3 px-4">
+                                <p className="font-bold text-blue-700 text-lg">
+                                  {row.cumulativeKwh.toFixed(2)}
+                                </p>
+                                <p className="text-sm text-gray-500">Cumulative kWh</p>
+                              </td>
+                              <td className="py-3 px-4">
+                                <div>
+                                  <p className="font-bold text-gray-700 text-sm">
+                                    {parseFloat(row.rawValue).toLocaleString()} Wh
+                                  </p>
+                                  <p className="text-xs text-gray-500">
+                                    API raw value
+                                  </p>
+                                </div>
+                              </td>
+                              <td className="py-3 px-4">
+                                {row.growth && parseFloat(row.growth) !== 0 && (
+                                  <div className={`inline-flex items-center px-3 py-1 rounded-full text-sm ${
+                                    parseFloat(row.growth) > 0
+                                      ? 'bg-green-100 text-green-800'
+                                      : parseFloat(row.growth) < 0
+                                        ? 'bg-red-100 text-red-800'
+                                        : 'bg-gray-100 text-gray-800'
+                                  }`}>
+                                    <TrendingUp className={`w-4 h-4 mr-1 ${
+                                      parseFloat(row.growth) > 0 ? 'text-green-600' : 'text-red-600'
+                                    }`} />
+                                    {parseFloat(row.growth) > 0 ? '+' : ''}{row.growth}%
+                                  </div>
+                                )}
+                                {(!row.growth || parseFloat(row.growth) === 0) && (
+                                  <span className="text-sm text-gray-400">—</span>
+                                )}
+                              </td>
                             </tr>
                           ))
                         )}
@@ -2983,21 +3430,6 @@ const CombinedAreaChart: React.FC = () => {
                 </div>
               )}
             </div>
-          </div>
-
-          {/* Footer */}
-          <div className="mt-8 pt-6 border-t border-gray-200 text-center text-sm text-gray-500">
-            <p>Combined Data Analytics • Switch between minute, daily, monthly, and yearly area graphs • Powered by RBP India Solar Solutions</p>
-            <p className="mt-1">
-              {viewMode === 'minute' 
-                ? `Displaying ${minuteData ? formatMinuteData().length : 0} minute data points` 
-                : viewMode === 'daily'
-                ? `Displaying ${dailyData ? formatDailyData().length : 0} daily data points`
-                : viewMode === 'monthly'
-                ? `Displaying ${monthlyData ? formatMonthlyData().length : 0} monthly data points`
-                : `Displaying ${yearlyData ? formatYearlyData().length : 0} yearly data points`}
-              • Updated: {new Date().toLocaleString()}
-            </p>
           </div>
         </div>
       )}

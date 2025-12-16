@@ -1,4 +1,4 @@
-// components/HistoricalDataChart.tsx - Fixed circular dependency issue
+// components/HistoricalDataChart.tsx - Fixed for daily data only
 import React, { useState, useEffect, useMemo } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, BarChart, Bar, Legend, ReferenceLine } from 'recharts';
 import { useDeviceContext } from '../context/DeviceContext';
@@ -21,55 +21,8 @@ import {
   Calculator,
   Info
 } from 'lucide-react';
+import { HistoricalDataPoint, HistoricalDataResponse, LoginResponse, CumulativeDataItem, PeriodDataItem } from '../types/solarData';
 
-interface HistoricalDataPoint {
-  [key: string]: string;
-  time_stamp: string;
-}
-
-interface HistoricalDataResponse {
-  req_serial_num: string;
-  result_code: string;
-  result_msg: string;
-  result_data: {
-    [ps_key: string]: {
-      [data_point: string]: HistoricalDataPoint[];
-    };
-  };
-}
-
-interface LoginResponse {
-  result_code: string;
-  result_msg: string;
-  result_data: {
-    token: string;
-    user_name: string;
-    email: string;
-    [key: string]: any;
-  } | null;
-}
-
-interface CumulativeDataItem {
-  timestamp: string;
-  date: string;
-  originalWh: number; // API value in Wh
-  cumulativeKwh: number; // Converted to kWh
-  cumulativeWh: number; // Original in Wh (for reference)
-  period: string;
-  isFirstPeriod: boolean; // Flag to identify first period
-}
-
-interface PeriodDataItem {
-  timestamp: string;
-  date: string;
-  periodProductionKwh: number; // Production for this period
-  cumulativeKwh: number; // Cumulative to date
-  originalWh: number; // Original API value in Wh
-  period: string;
-  growth?: number; // Growth percentage
-  calculation: string; // Formula used
-  isFirstPeriod: boolean;
-}
 
 const HistoricalDataChart: React.FC = () => {
   const { psKey } = useDeviceContext();
@@ -129,33 +82,22 @@ const HistoricalDataChart: React.FC = () => {
     
     setFormData(prev => ({
       ...prev,
-      start_time: formatDateForAPI(sevenDaysAgo, 'day'),
-      end_time: formatDateForAPI(today, 'day')
+      start_time: formatDateForAPI(sevenDaysAgo),
+      end_time: formatDateForAPI(today)
     }));
   }, []);
 
-  // Format date for API based on query_type
-  const formatDateForAPI = (date: Date, queryType: string): string => {
+  // Format date for API - Only daily format
+  const formatDateForAPI = (date: Date): string => {
     const year = date.getFullYear();
     const month = String(date.getMonth() + 1).padStart(2, '0');
     const day = String(date.getDate()).padStart(2, '0');
-    
-    switch (queryType) {
-      case '1': return `${year}${month}${day}`;
-      case '2': return `${year}${month}`;
-      case '3': return `${year}`;
-      default: return `${year}${month}${day}`;
-    }
+    return `${year}${month}${day}`;
   };
 
-  // Format date from API for display
-  const formatDateFromAPI = (dateStr: string, queryType: string): string => {
-    switch (queryType) {
-      case '1': return `${dateStr.slice(0,4)}-${dateStr.slice(4,6)}-${dateStr.slice(6,8)}`;
-      case '2': return `${dateStr.slice(0,4)}-${dateStr.slice(4,6)}`;
-      case '3': return dateStr;
-      default: return dateStr;
-    }
+  // Format date from API for display - Only daily format
+  const formatDateFromAPI = (dateStr: string): string => {
+    return `${dateStr.slice(0,4)}-${dateStr.slice(4,6)}-${dateStr.slice(6,8)}`;
   };
 
   // Handle date changes and update formData
@@ -166,11 +108,11 @@ const HistoricalDataChart: React.FC = () => {
       
       setFormData(prev => ({
         ...prev,
-        start_time: formatDateForAPI(start, formData.query_type),
-        end_time: formatDateForAPI(end, formData.query_type)
+        start_time: formatDateForAPI(start),
+        end_time: formatDateForAPI(end)
       }));
     }
-  }, [startDate, endDate, formData.query_type]);
+  }, [startDate, endDate]);
 
   // Set current date as end time
   const setEndToToday = () => {
@@ -179,40 +121,11 @@ const HistoricalDataChart: React.FC = () => {
     setEndDate(formatForDisplay(today));
   };
 
-  // Calculate date ranges
-  const setDateRange = (range: 'week' | 'month' | 'year' | '3months' | '6months') => {
+  // Calculate date ranges - Only daily ranges
+  const setDateRange = (days: number) => {
     const today = new Date();
     const start = new Date();
-    
-    switch (range) {
-      case 'week': start.setDate(today.getDate() - 7); break;
-      case 'month': start.setMonth(today.getMonth() - 1); break;
-      case '3months': start.setMonth(today.getMonth() - 3); break;
-      case '6months': start.setMonth(today.getMonth() - 6); break;
-      case 'year': start.setFullYear(today.getFullYear() - 1); break;
-    }
-    
-    const formatForDisplay = (date: Date) => date.toISOString().split('T')[0];
-    setStartDate(formatForDisplay(start));
-    setEndDate(formatForDisplay(today));
-  };
-
-  // Set query type and update dates accordingly
-  const setQueryType = (type: '1' | '2' | '3') => {
-    setFormData(prev => ({
-      ...prev,
-      query_type: type,
-      data_type: type === '1' ? '2' : '4'
-    }));
-    
-    const today = new Date();
-    const start = new Date();
-    
-    switch (type) {
-      case '1': start.setDate(today.getDate() - 7); break;
-      case '2': start.setMonth(today.getMonth() - 6); break;
-      case '3': start.setFullYear(today.getFullYear() - 3); break;
-    }
+    start.setDate(today.getDate() - days);
     
     const formatForDisplay = (date: Date) => date.toISOString().split('T')[0];
     setStartDate(formatForDisplay(start));
@@ -277,16 +190,9 @@ const HistoricalDataChart: React.FC = () => {
     const end = new Date(endDate);
     const daysDiff = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
     
-    if (formData.query_type === '1' && daysDiff > 100) {
+    // Daily data queries are limited to 100 days maximum
+    if (daysDiff > 100) {
       setError('Daily data queries are limited to 100 days maximum');
-      return;
-    }
-    if (formData.query_type === '2' && daysDiff > 24 * 30) {
-      setError('Monthly data queries are limited to 24 months maximum');
-      return;
-    }
-    if (formData.query_type === '3' && daysDiff > 5 * 365) {
-      setError('Yearly data queries are limited to 5 years maximum');
       return;
     }
 
@@ -345,19 +251,9 @@ const HistoricalDataChart: React.FC = () => {
     // Sort data by timestamp chronologically
     const sortedData = [...dataArray].sort((a, b) => a.time_stamp.localeCompare(b.time_stamp));
 
-    // Get period label based on query type
-    const getPeriodLabel = () => {
-      switch (formData.query_type) {
-        case '1': return 'Daily';
-        case '2': return 'Monthly';
-        case '3': return 'Yearly';
-        default: return 'Period';
-      }
-    };
-
     return sortedData.map((item, index) => {
       const timestamp = item.time_stamp;
-      const formattedDate = formatDateFromAPI(timestamp, formData.query_type);
+      const formattedDate = formatDateFromAPI(timestamp);
       const valueKey = Object.keys(item).find(key => key !== 'time_stamp');
       
       if (!valueKey) {
@@ -367,7 +263,7 @@ const HistoricalDataChart: React.FC = () => {
           originalWh: 0,
           cumulativeKwh: 0,
           cumulativeWh: 0,
-          period: getPeriodLabel(),
+          period: 'Daily',
           isFirstPeriod: index === 0
         };
       }
@@ -381,7 +277,7 @@ const HistoricalDataChart: React.FC = () => {
         originalWh,
         cumulativeKwh,
         cumulativeWh: originalWh,
-        period: getPeriodLabel(),
+        period: 'Daily',
         isFirstPeriod: index === 0
       };
     });
@@ -409,9 +305,9 @@ const HistoricalDataChart: React.FC = () => {
           periodProductionKwh: 0, // FIRST PERIOD IS 0
           cumulativeKwh: current.cumulativeKwh,
           originalWh: current.originalWh,
-          period: current.period,
+          period: 'Daily',
           growth: 0, // No growth for first period
-          calculation: 'First period: Production = 0 kWh (no previous period to compare)',
+          calculation: 'First day: Production = 0 kWh (no previous day to compare)',
           isFirstPeriod: true
         };
       }
@@ -445,7 +341,7 @@ const HistoricalDataChart: React.FC = () => {
         periodProductionKwh: Number(safePeriodKwh.toFixed(2)),
         cumulativeKwh: current.cumulativeKwh,
         originalWh: current.originalWh,
-        period: current.period,
+        period: 'Daily',
         growth,
         calculation: `${current.cumulativeKwh.toFixed(2)} kWh - ${previous.cumulativeKwh.toFixed(2)} kWh = ${safePeriodKwh.toFixed(2)} kWh`,
         isFirstPeriod: false
@@ -460,7 +356,7 @@ const HistoricalDataChart: React.FC = () => {
     const result = convertCumulativeToPeriodProduction(cumulativeData);
     console.log('Period Data with First Period as 0:', result);
     return result;
-  }, [historicalData, formData.query_type]);
+  }, [historicalData]);
 
   // Format data for chart based on conversion mode
   const formatChartData = () => {
@@ -486,7 +382,7 @@ const HistoricalDataChart: React.FC = () => {
         value: item.periodProductionKwh,
         displayValue: item.periodProductionKwh.toFixed(2),
         unit: 'kWh',
-        label: `${item.period} Production`,
+        label: `Daily Production`,
         cumulativeValue: item.cumulativeKwh,
         isFirstPeriod: item.isFirstPeriod
       }));
@@ -507,14 +403,9 @@ const HistoricalDataChart: React.FC = () => {
     return configs[point as keyof typeof configs] || { label: point, unit: '', icon: Activity, color: '#6B7280' };
   };
 
-  // Get query type description
+  // Get query type description - Always Daily now
   const getQueryTypeDescription = () => {
-    const types: { [key: string]: string } = {
-      '1': 'Daily',
-      '2': 'Monthly',
-      '3': 'Yearly'
-    };
-    return types[formData.query_type] || 'Unknown';
+    return 'Daily';
   };
 
   // Calculate statistics - UPDATED FOR FIRST PERIOD AS 0
@@ -574,7 +465,7 @@ const HistoricalDataChart: React.FC = () => {
     
     const headers = isCumulativeMode 
       ? ['Date', 'Cumulative (Wh)', 'Cumulative (kWh)', 'Period Type', 'Is First Period']
-      : ['Date', 'Period Production (kWh)', 'Cumulative (kWh)', 'Growth %', 'Calculation', 'Original (Wh)', 'Is First Period'];
+      : ['Date', 'Daily Production (kWh)', 'Cumulative (kWh)', 'Growth %', 'Calculation', 'Original (Wh)', 'Is First Period'];
     
     const csvContent = [
       headers.join(','),
@@ -625,7 +516,7 @@ const HistoricalDataChart: React.FC = () => {
             ) : (
               <>
                 <div className="flex items-center justify-between">
-                  <span className="text-sm text-gray-600">{getQueryTypeDescription()} Production:</span>
+                  <span className="text-sm text-gray-600">Daily Production:</span>
                   <span className={`font-semibold ${data.isFirstPeriod ? 'text-gray-500' : 'text-green-600'} ml-2`}>
                     {data.periodProductionKwh?.toFixed(2) || data.value?.toFixed(2)} kWh
                   </span>
@@ -651,7 +542,7 @@ const HistoricalDataChart: React.FC = () => {
               <div className="mt-2 pt-2 border-t border-gray-100">
                 <div className="flex items-center gap-1 text-xs text-gray-600">
                   <Info className="w-3 h-3" />
-                  <span>First period production set to 0 (no previous period to compare)</span>
+                  <span>First day production set to 0 (no previous day to compare)</span>
                 </div>
               </div>
             )}
@@ -728,13 +619,13 @@ const HistoricalDataChart: React.FC = () => {
                 <TrendingUp className="w-8 h-8 text-blue-600" />
                 Professional Energy Data Analysis
                 <span className={`text-sm px-2 py-1 rounded-full ${conversionMode === 'cumulative' ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800'}`}>
-                  {conversionMode === 'cumulative' ? 'Cumulative View' : 'Period Production'}
+                  {conversionMode === 'cumulative' ? 'Cumulative View' : 'Daily Production'}
                 </span>
               </h1>
               <p className="text-gray-600">
                 {conversionMode === 'cumulative' 
                   ? 'Viewing cumulative energy data (Wh → kWh conversion)'
-                  : `Calculating ${getQueryTypeDescription().toLowerCase()} production: Current Cumulative - Previous Cumulative • First period = 0 kWh`
+                  : `Calculating daily production: Current Cumulative - Previous Cumulative • First day = 0 kWh`
                 }
               </p>
             </div>
@@ -778,7 +669,7 @@ const HistoricalDataChart: React.FC = () => {
               <Calendar className="w-4 h-4 text-blue-500" />
               <span className="text-sm font-medium text-gray-700">Period</span>
               <span className="text-sm text-gray-900">
-                {getQueryTypeDescription()}
+                Daily
               </span>
             </div>
             
@@ -798,7 +689,7 @@ const HistoricalDataChart: React.FC = () => {
               <Calculator className="w-4 h-4 text-amber-500" />
               <span className="text-sm font-medium text-gray-700">Conversion</span>
               <span className="text-sm text-gray-900">
-                {conversionMode === 'cumulative' ? 'Wh → kWh' : 'Cumulative → Period'}
+                {conversionMode === 'cumulative' ? 'Wh → kWh' : 'Cumulative → Daily'}
               </span>
             </div>
           </div>
@@ -807,9 +698,9 @@ const HistoricalDataChart: React.FC = () => {
           {conversionMode === 'period' && chartData.length > 0 && (
             <div className="mt-4 flex items-center gap-2 px-4 py-2 bg-gray-50 rounded-lg border border-gray-200">
               <div className="w-2 h-2 rounded-full bg-gray-500"></div>
-              <span className="text-sm font-medium text-gray-700">First Period Logic:</span>
+              <span className="text-sm font-medium text-gray-700">First Day Logic:</span>
               <span className="text-sm text-gray-900">
-                Production = 0 kWh (no previous period to compare)
+                Production = 0 kWh (no previous day to compare)
               </span>
               <span className="text-sm text-gray-600 ml-2">
                 • {chartData[0].date}: <span className="font-semibold">0 kWh</span>
@@ -842,13 +733,13 @@ const HistoricalDataChart: React.FC = () => {
                         : 'border-gray-200 hover:border-gray-300'
                     }`}
                   >
-                    <p className="font-semibold">Period Production</p>
+                    <p className="font-semibold">Daily Production</p>
                     <p className="text-xs text-gray-500">Current - Previous calculation</p>
                     <div className="text-xs text-gray-600 mt-1">
                       Formula: P = C<sub>n</sub> - C<sub>n-1</sub>
                     </div>
                     <div className="text-xs text-amber-600 mt-1">
-                      First period = 0 kWh
+                      First day = 0 kWh
                     </div>
                   </button>
                   <button 
@@ -864,48 +755,6 @@ const HistoricalDataChart: React.FC = () => {
                     <div className="text-xs text-gray-600 mt-1">
                       Conversion: kWh = Wh ÷ 1000
                     </div>
-                  </button>
-                </div>
-              </div>
-
-              {/* Query Type Selection */}
-              <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Query Type
-                </label>
-                <div className="space-y-2">
-                  <button 
-                    onClick={() => setQueryType('1')} 
-                    className={`w-full text-left px-4 py-3 rounded-lg border transition ${
-                      formData.query_type === '1' 
-                        ? 'border-blue-500 bg-blue-50 text-blue-700' 
-                        : 'border-gray-200 hover:border-gray-300'
-                    }`}
-                  >
-                    <p className="font-semibold">Daily Data</p>
-                    <p className="text-xs text-gray-500">Day-by-day analysis</p>
-                  </button>
-                  <button 
-                    onClick={() => setQueryType('2')} 
-                    className={`w-full text-left px-4 py-3 rounded-lg border transition ${
-                      formData.query_type === '2' 
-                        ? 'border-blue-500 bg-blue-50 text-blue-700' 
-                        : 'border-gray-200 hover:border-gray-300'
-                    }`}
-                  >
-                    <p className="font-semibold">Monthly Data</p>
-                    <p className="text-xs text-gray-500">Month-by-month trends</p>
-                  </button>
-                  <button 
-                    onClick={() => setQueryType('3')} 
-                    className={`w-full text-left px-4 py-3 rounded-lg border transition ${
-                      formData.query_type === '3' 
-                        ? 'border-blue-500 bg-blue-50 text-blue-700' 
-                        : 'border-gray-200 hover:border-gray-300'
-                    }`}
-                  >
-                    <p className="font-semibold">Yearly Data</p>
-                    <p className="text-xs text-gray-500">Year-over-year comparison</p>
                   </button>
                 </div>
               </div>
@@ -959,31 +808,31 @@ const HistoricalDataChart: React.FC = () => {
                 </label>
                 <div className="grid grid-cols-2 gap-2">
                   <button 
-                    onClick={() => setDateRange('week')} 
+                    onClick={() => setDateRange(7)} 
                     className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 rounded-lg text-gray-700 transition"
                   >
                     Last Week
                   </button>
                   <button 
-                    onClick={() => setDateRange('month')} 
+                    onClick={() => setDateRange(30)} 
                     className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 rounded-lg text-gray-700 transition"
                   >
-                    Last Month
+                    Last 30 Days
                   </button>
                   <button 
-                    onClick={() => setDateRange('3months')} 
+                    onClick={() => setDateRange(90)} 
                     className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 rounded-lg text-gray-700 transition"
                   >
-                    Last 3 Months
+                    Last 90 Days
                   </button>
                   <button 
-                    onClick={() => setDateRange('6months')} 
+                    onClick={() => setDateRange(180)} 
                     className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 rounded-lg text-gray-700 transition"
                   >
-                    Last 6 Months
+                    Last 180 Days
                   </button>
                   <button 
-                    onClick={() => setDateRange('year')} 
+                    onClick={() => setDateRange(365)} 
                     className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 rounded-lg text-gray-700 transition"
                   >
                     Last Year
@@ -1077,19 +926,19 @@ const HistoricalDataChart: React.FC = () => {
             {stats && chartData.length > 0 && (
               <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
                 <h3 className="text-lg font-semibold text-gray-900 mb-4">
-                  {conversionMode === 'cumulative' ? 'Cumulative Stats' : 'Production Stats'}
+                  {conversionMode === 'cumulative' ? 'Cumulative Stats' : 'Daily Production Stats'}
                 </h3>
                 <div className="space-y-3">
                   <div className="flex justify-between items-center">
-                    <span className="text-sm text-gray-600">Periods Analyzed</span>
+                    <span className="text-sm text-gray-600">Days Analyzed</span>
                     <span className="font-semibold text-gray-900">{stats.count}</span>
                   </div>
                   <div className="flex justify-between items-center">
-                    <span className="text-sm text-gray-600">First Period</span>
+                    <span className="text-sm text-gray-600">First Day</span>
                     <span className="font-semibold text-gray-900">{chartData[0]?.date}</span>
                   </div>
                   <div className="flex justify-between items-center">
-                    <span className="text-sm text-gray-600">First Value</span>
+                    <span className="text-sm text-gray-600">First Day Value</span>
                     <span className={`font-semibold ${conversionMode === 'period' ? 'text-gray-500' : 'text-blue-600'}`}>
                       {stats.firstValue.toFixed(2)} kWh
                     </span>
@@ -1100,7 +949,7 @@ const HistoricalDataChart: React.FC = () => {
                   </div>
                   {conversionMode === 'period' && (
                     <div className="flex justify-between items-center">
-                      <span className="text-sm text-gray-600">Non-Zero Periods</span>
+                      <span className="text-sm text-gray-600">Non-Zero Days</span>
                       <span className="font-semibold text-gray-900">{stats.nonZeroPeriods}</span>
                     </div>
                   )}
@@ -1129,7 +978,7 @@ const HistoricalDataChart: React.FC = () => {
                         <BarChart3 className="w-7 h-7 text-blue-600" />
                         {conversionMode === 'cumulative' 
                           ? `Cumulative Energy Data (kWh)`
-                          : `${getQueryTypeDescription()} Energy Production (kWh)`
+                          : `Daily Energy Production (kWh)`
                         }
                         <span className={`text-sm px-2 py-1 rounded-full ${conversionMode === 'cumulative' ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800'}`}>
                           {conversionMode === 'cumulative' 
@@ -1218,7 +1067,7 @@ const HistoricalDataChart: React.FC = () => {
                             stroke="#6b7280"
                             tickFormatter={(value) => value.toLocaleString()}
                             label={{ 
-                              value: conversionMode === 'cumulative' ? 'Cumulative Energy (kWh)' : 'Period Production (kWh)', 
+                              value: conversionMode === 'cumulative' ? 'Cumulative Energy (kWh)' : 'Daily Production (kWh)', 
                               angle: -90, 
                               position: 'insideLeft',
                               offset: 10
@@ -1229,7 +1078,7 @@ const HistoricalDataChart: React.FC = () => {
                           <Area 
                             type="monotone" 
                             dataKey="value" 
-                            name={conversionMode === 'cumulative' ? 'Cumulative Energy' : 'Period Production'}
+                            name={conversionMode === 'cumulative' ? 'Cumulative Energy' : 'Daily Production'}
                             stroke={config.color} 
                             strokeWidth={2}
                             fill="url(#colorValue)"
@@ -1240,7 +1089,7 @@ const HistoricalDataChart: React.FC = () => {
                               stroke="#6B7280"
                               strokeDasharray="3 3"
                               label={{ 
-                                value: 'First period: 0 kWh', 
+                                value: 'First day: 0 kWh', 
                                 position: 'top',
                                 fill: '#6B7280',
                                 fontSize: 12
@@ -1264,7 +1113,7 @@ const HistoricalDataChart: React.FC = () => {
                             stroke="#6b7280"
                             tickFormatter={(value) => value.toLocaleString()}
                             label={{ 
-                              value: conversionMode === 'cumulative' ? 'Cumulative Energy (kWh)' : 'Period Production (kWh)', 
+                              value: conversionMode === 'cumulative' ? 'Cumulative Energy (kWh)' : 'Daily Production (kWh)', 
                               angle: -90, 
                               position: 'insideLeft',
                               offset: 10
@@ -1275,7 +1124,7 @@ const HistoricalDataChart: React.FC = () => {
                           <Line 
                             type="monotone" 
                             dataKey="value" 
-                            name={conversionMode === 'cumulative' ? 'Cumulative Energy' : 'Period Production'}
+                            name={conversionMode === 'cumulative' ? 'Cumulative Energy' : 'Daily Production'}
                             stroke={config.color} 
                             strokeWidth={3}
                             dot={{ stroke: config.color, strokeWidth: 2, r: 4 }}
@@ -1298,7 +1147,7 @@ const HistoricalDataChart: React.FC = () => {
                             stroke="#6b7280"
                             tickFormatter={(value) => value.toLocaleString()}
                             label={{ 
-                              value: conversionMode === 'cumulative' ? 'Cumulative Energy (kWh)' : 'Period Production (kWh)', 
+                              value: conversionMode === 'cumulative' ? 'Cumulative Energy (kWh)' : 'Daily Production (kWh)', 
                               angle: -90, 
                               position: 'insideLeft',
                               offset: 10
@@ -1308,7 +1157,7 @@ const HistoricalDataChart: React.FC = () => {
                           <Legend />
                           <Bar 
                             dataKey="value" 
-                            name={conversionMode === 'cumulative' ? 'Cumulative Energy' : 'Period Production'}
+                            name={conversionMode === 'cumulative' ? 'Cumulative Energy' : 'Daily Production'}
                             fill={config.color} 
                             fillOpacity={0.8}
                             radius={[4, 4, 0, 0]}
@@ -1324,7 +1173,7 @@ const HistoricalDataChart: React.FC = () => {
                   <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
                     <h3 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
                       <Activity className="w-6 h-6 text-blue-600" />
-                      {conversionMode === 'cumulative' ? 'Cumulative Statistics' : 'Production Statistics'}
+                      {conversionMode === 'cumulative' ? 'Cumulative Statistics' : 'Daily Production Statistics'}
                     </h3>
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                       <div className="bg-blue-50 rounded-lg p-4">
@@ -1335,21 +1184,21 @@ const HistoricalDataChart: React.FC = () => {
                           {conversionMode === 'cumulative' ? stats.lastValue.toFixed(2) : stats.sum.toFixed(2)} kWh
                         </p>
                         <p className="text-sm text-gray-600">
-                          {conversionMode === 'cumulative' ? 'Final cumulative value' : 'Sum of all periods'}
+                          {conversionMode === 'cumulative' ? 'Final cumulative value' : 'Sum of all days'}
                         </p>
                       </div>
                       <div className="bg-green-50 rounded-lg p-4">
-                        <p className="text-xs text-gray-600 mb-1">Average per Period</p>
+                        <p className="text-xs text-gray-600 mb-1">Average per Day</p>
                         <p className="font-semibold text-gray-900">{stats.avg.toFixed(2)} kWh</p>
-                        <p className="text-sm text-gray-600">per {getQueryTypeDescription().slice(0, -2).toLowerCase()}</p>
+                        <p className="text-sm text-gray-600">per day</p>
                       </div>
                       <div className="bg-amber-50 rounded-lg p-4">
-                        <p className="text-xs text-gray-600 mb-1">Peak Period</p>
+                        <p className="text-xs text-gray-600 mb-1">Peak Day</p>
                         <p className="font-semibold text-gray-900">{stats.maxPeriod}</p>
                         <p className="text-sm text-green-600">{stats.max} kWh</p>
                       </div>
                       <div className="bg-purple-50 rounded-lg p-4">
-                        <p className="text-xs text-gray-600 mb-1">First Period</p>
+                        <p className="text-xs text-gray-600 mb-1">First Day</p>
                         <p className="font-semibold text-gray-900">{chartData[0]?.date}</p>
                         <p className={`text-sm ${conversionMode === 'period' ? 'text-gray-500' : 'text-blue-600'}`}>
                           {stats.firstValue.toFixed(2)} kWh
@@ -1362,7 +1211,7 @@ const HistoricalDataChart: React.FC = () => {
                 {/* Data Table */}
                 <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
                   <h3 className="text-xl font-bold text-gray-800 mb-4">
-                    {conversionMode === 'cumulative' ? 'Cumulative Data' : 'Production Data'}
+                    {conversionMode === 'cumulative' ? 'Cumulative Data' : 'Daily Production Data'}
                   </h3>
                   <div className="overflow-x-auto">
                     <table className="w-full">
@@ -1446,7 +1295,7 @@ const HistoricalDataChart: React.FC = () => {
                                 <td className="px-6 py-4">
                                   {index === 0 ? (
                                     <span className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-gray-100 text-gray-800">
-                                      First period: 0 kWh
+                                      First day: 0 kWh
                                     </span>
                                   ) : (
                                     <span className="text-sm text-gray-400">—</span>
@@ -1506,7 +1355,7 @@ const HistoricalDataChart: React.FC = () => {
                 </div>
                 <h3 className="text-xl font-semibold text-gray-900 mb-2">No Historical Data Loaded</h3>
                 <p className="text-gray-600 mb-6 max-w-md mx-auto">
-                  Configure your parameters and click "Load Historical Data" to analyze energy production trends
+                  Configure your parameters and click "Load Historical Data" to analyze daily energy production trends
                 </p>
                 <div className="flex items-center justify-center gap-4 text-sm text-gray-500">
                   <div className="flex items-center gap-2">
@@ -1515,7 +1364,7 @@ const HistoricalDataChart: React.FC = () => {
                   </div>
                   <div className="flex items-center gap-2">
                     <div className="w-2 h-2 rounded-full bg-blue-500"></div>
-                    <span>Choose query type</span>
+                    <span>Choose data point</span>
                   </div>
                   <div className="flex items-center gap-2">
                     <div className="w-2 h-2 rounded-full bg-purple-500"></div>
@@ -1529,8 +1378,8 @@ const HistoricalDataChart: React.FC = () => {
 
         {/* Footer */}
         <div className="mt-8 pt-6 border-t border-gray-200 text-center text-sm text-gray-500">
-          <p>Professional Energy Analytics • Wh → kWh Conversion & Cumulative → Period Production • Powered by RBP India Solar Solutions</p>
-          <p className="mt-1">First period production = 0 kWh (no previous period to compare) • {new Date().toLocaleDateString()}</p>
+          <p>Professional Energy Analytics • Wh → kWh Conversion & Cumulative → Daily Production • Powered by RBP India Solar Solutions</p>
+          <p className="mt-1">First day production = 0 kWh (no previous day to compare) • {new Date().toLocaleDateString()}</p>
         </div>
       </div>
     </div>
