@@ -1,7 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { Key, Cpu, Search, CheckCircle, AlertCircle } from 'lucide-react';
-import { useDeviceContext } from '../context/DeviceContext';
-import { LoginResponse, DeviceDataResponse, DevicePoint } from '../types/solarData';
+import { useDeviceContext } from '../../context/DeviceContext';
+import { LoginResponse, DeviceDataResponse, DevicePoint } from '../../types/solarData';
+
+
+
+const USER_ACCOUNT = import.meta.env.REACT_APP_USER_ACCOUNT;
+const USER_PASSWORD = import.meta.env.REACT_APP_USER_PASSWORD;
 
 interface AutoLoginProps {
   onTokenChange: (token: string) => void;
@@ -10,17 +15,17 @@ interface AutoLoginProps {
 
 const AutoLogin: React.FC<AutoLoginProps> = ({ onTokenChange, onDeviceDataChange }) => {
   const { psKey, setPsKey } = useDeviceContext();
-  
+
   // Auto login and serial number states
   const [autoLoginEnabled, setAutoLoginEnabled] = useState<boolean>(() => {
     const saved = localStorage.getItem('autoLoginEnabled');
     return saved ? JSON.parse(saved) : true;
   });
-  
+
   const [serialNumber, setSerialNumber] = useState<string>(() => {
     return localStorage.getItem('serialNumber') || 'I2460100212';
   });
-  
+
   const [token, setToken] = useState<string>('');
   const [loading, setLoading] = useState({
     login: false,
@@ -57,8 +62,8 @@ const AutoLogin: React.FC<AutoLoginProps> = ({ onTokenChange, onDeviceDataChange
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          user_account: 'sahoo@rbpindia.com',
-          user_password: 'rbpindia@2025'
+          user_account: USER_ACCOUNT,
+          user_password: USER_PASSWORD
         })
       });
 
@@ -67,13 +72,13 @@ const AutoLogin: React.FC<AutoLoginProps> = ({ onTokenChange, onDeviceDataChange
       }
 
       const result: LoginResponse = await response.json();
-      
+
       if (result.result_code === "1") {
         const newToken = result.result_data?.token || '';
         setToken(newToken);
         onTokenChange(newToken);
         console.log('Login successful, token set');
-        
+
         // If we have a serial number, fetch device data
         if (serialNumber) {
           fetchDeviceDataBySerial(newToken);
@@ -104,7 +109,7 @@ const AutoLogin: React.FC<AutoLoginProps> = ({ onTokenChange, onDeviceDataChange
   // Fetch device data by serial number
   const fetchDeviceDataBySerial = async (tokenParam?: string) => {
     const actualToken = tokenParam || token;
-    
+
     if (!actualToken) {
       setError('No login token available. Please login first.');
       return;
@@ -133,7 +138,7 @@ const AutoLogin: React.FC<AutoLoginProps> = ({ onTokenChange, onDeviceDataChange
       }
 
       const result: DeviceDataResponse = await response.json();
-      
+
       if (result.result_code === "1") {
         const devicePoint = result.result_data?.device_point_list?.[0]?.device_point;
         if (devicePoint) {
@@ -195,80 +200,54 @@ const AutoLogin: React.FC<AutoLoginProps> = ({ onTokenChange, onDeviceDataChange
     if (!deviceData) return null;
 
     return (
-      <div className="mt-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
-        <h4 className="font-medium text-gray-900 mb-2">Device Details</h4>
-        <div className="grid grid-cols-2 gap-3 text-sm">
-          <div>
-            <span className="text-gray-600">Serial Number:</span>
-            <span className="ml-2 font-medium">{deviceData.device_sn}</span>
-          </div>
-          <div>
-            <span className="text-gray-600">Status:</span>
-            <span className={`ml-2 font-medium ${
-              deviceData.dev_status === 1 ? 'text-green-600' : 'text-red-600'
-            }`}>
-              {deviceData.dev_status === 1 ? 'Normal' : 'Fault'}
-            </span>
-          </div>
-          <div>
-            <span className="text-gray-600">PS Key:</span>
-            <span className="ml-2 font-medium">{deviceData.ps_key}</span>
-          </div>
-          <div>
-            <span className="text-gray-600">Device Type:</span>
-            <span className="ml-2 font-medium">{deviceData.dev_type}</span>
-          </div>
-        </div>
-      </div>
+      <div className=""></div>
     );
   };
 
   return (
     <div className="space-y-4">
       {/* Auto Login Toggle */}
-      <div className="flex items-center justify-between">
+      <button
+        onClick={handleLogin}
+        disabled={loading.login}
+        className="w-full px-4 py-2.5 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium transition flex items-center justify-between"
+      >
         <div className="flex items-center gap-2">
           <input
             type="checkbox"
             id="auto-login"
             checked={autoLoginEnabled}
-            onChange={(e) => setAutoLoginEnabled(e.target.checked)}
-            className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+            onChange={(e) => {
+              e.stopPropagation();
+              setAutoLoginEnabled(e.target.checked);
+            }}
+            onClick={(e) => e.stopPropagation()}
+            className="w-4 h-4 rounded focus:ring-2 focus:ring-white/50 cursor-pointer bg-green-400"
           />
-          <label htmlFor="auto-login" className="text-sm font-medium text-gray-700">
+          <label
+            htmlFor="auto-login"
+            className="text-sm cursor-pointer"
+            onClick={(e) => e.stopPropagation()}
+          >
             Auto Login
           </label>
         </div>
-        
-        <button
-          onClick={handleLogin}
-          disabled={loading.login}
-          className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-medium transition flex items-center gap-2"
-        >
+
+        <div className="flex items-center gap-2">
           {loading.login ? (
             <>
               <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-              Logging in...
+              <span className="text-sm">Logging in...</span>
             </>
           ) : (
             <>
               <CheckCircle className="w-4 h-4" />
-              Refresh Token
+              <span className="text-sm">Refresh Token</span>
             </>
           )}
-        </button>
-      </div>
-
-      {/* Token Status */}
-      {token && (
-        <div className="flex items-center gap-3 bg-green-50 px-4 py-2 rounded-lg border border-green-200">
-          <CheckCircle className="w-5 h-5 text-green-500" />
-          <div>
-            <p className="text-sm font-medium text-green-900">Logged In</p>
-            <p className="text-xs text-green-700 truncate">Token: {token.substring(0, 20)}...</p>
-          </div>
         </div>
-      )}
+      </button>
+
 
       {/* Device Configuration */}
       <div className="space-y-3">
@@ -290,43 +269,24 @@ const AutoLogin: React.FC<AutoLoginProps> = ({ onTokenChange, onDeviceDataChange
             <button
               onClick={() => fetchDeviceDataBySerial()}
               disabled={loading.device || !token}
-              className={`px-4 py-2 rounded-lg font-medium transition flex items-center gap-2 text-sm ${
-                loading.device || !token
-                  ? 'bg-gray-300 cursor-not-allowed text-gray-500'
-                  : 'bg-blue-600 hover:bg-blue-700 text-white'
-              }`}
+              className={`px-4 py-2 rounded-lg font-medium transition flex items-center gap-2 text-sm ${loading.device || !token
+                ? 'bg-gray-300 cursor-not-allowed text-gray-500'
+                : 'bg-blue-600 hover:bg-blue-700 text-white'
+                }`}
             >
               {loading.device ? (
                 <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
               ) : (
                 <Search className="w-4 h-4" />
               )}
-              Fetch
+
             </button>
           </div>
           <p className="text-xs text-gray-500 mt-1">
-            Enter inverter serial number to fetch PS Key automatically
+            Enter inverter serial number.
           </p>
         </div>
 
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            <div className="flex items-center gap-2">
-              <Key className="w-4 h-4" />
-              PS Key
-            </div>
-          </label>
-          <input
-            type="text"
-            value={psKey || ''}
-            onChange={(e) => setPsKey(e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition text-sm"
-            placeholder="Enter PS Key"
-          />
-          <p className="text-xs text-gray-500 mt-1">
-            Current: {psKey || 'Not set'} • Auto-updated from serial number
-          </p>
-        </div>
       </div>
 
       {/* Error Display */}
@@ -338,19 +298,6 @@ const AutoLogin: React.FC<AutoLoginProps> = ({ onTokenChange, onDeviceDataChange
           </div>
           <p className="text-sm text-red-600 mt-1">{error}</p>
         </div>
-      )}
-
-      {/* Device Details */}
-      {deviceData && (
-        <>
-          <button
-            onClick={() => setShowDeviceDetails(!showDeviceDetails)}
-            className="w-full px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition flex items-center justify-center gap-2"
-          >
-            {showDeviceDetails ? 'Hide' : 'Show'} Device Details
-          </button>
-          {showDeviceDetails && renderDeviceDetails()}
-        </>
       )}
     </div>
   );

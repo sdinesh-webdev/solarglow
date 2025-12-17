@@ -6,8 +6,8 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const SOLAR_USER_ACCOUNT = process.env.SOLAR_USER_ACCOUNT;
-const SOLAR_USER_PASSWORD = process.env.SOLAR_USER_PASSWORD;
+const SOLAR_USER_ACCOUNT = process.env.REACT_APP_USER_ACCOUNT;
+const SOLAR_USER_PASSWORD = process.env.REACT_APP_USER_PASSWORD;
 const SOLAR_APP_KEY = process.env.SOLAR_APP_KEY;
 const SOLAR_SECRET_KEY = process.env.SOLAR_SECRET_KEY;
 

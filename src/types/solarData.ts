@@ -53,6 +53,56 @@ export interface MonthlyDataItem {
   formattedValue?: string; // For backward compatibility
 }
 
+export interface MinuteDataRow {
+  time: string;
+  p24: number;
+  p5: number;
+  p6: number;
+  p18: number;
+  p21: number;
+}
+
+export interface DailyDataRow {
+  date: string;
+  dayOfWeek: string;
+  formattedValue: string;
+  rawValue: string;
+  isEnergyParameter?: boolean;
+  isFirstPeriod?: boolean;
+  isToday?: boolean;
+  cumulativeKwh?: number;
+  periodProductionKwh?: number;
+  growth?: string;
+  calculation?: string;
+}
+
+export interface MonthlyDataRow {
+  monthName: string;
+  year: string;
+  monthNum: number;
+  formattedMonthlyKwh: string;
+  cumulativeKwh: number;
+  rawValue: string;
+  growth?: string;
+}
+
+export interface YearlyDataRow {
+  year: string;
+  formattedMonthlyKwh: string;
+  cumulativeKwh: number;
+  rawValue: string;
+  growth?: string;
+}
+
+export interface DataTableProps {
+  viewMode: 'minute' | 'daily' | 'monthly' | 'yearly';
+  minuteData: any;
+  dailyData: any;
+  monthlyData: any;
+  yearlyData: any;
+  conversionMode: 'cumulative' | 'period';
+}
+
 export interface DailyDataItem {
   date: string;
   value: number;
